@@ -124,6 +124,25 @@ JAM_DESKTOP_DIR=/path/to/browser JAM_RELAY_PATH=/path/to/backend/jam-relay.js ./
 
 데스크톱 · backend 폴더에서 `npm install`을 먼저 해 두어야 해요 (`ws` 모듈).
 
+### 에뮬레이터로 확인하기
+
+`desktop-host.js` 는 `--control <포트>` 로 띄우면 HTTP로 명령을 받아서, 에뮬레이터의 폰 앱을 손님으로 붙여 볼 수 있어요.
+에뮬레이터에서 PC는 `10.0.2.2` 로 보여요.
+
+```bash
+node core/src/test/node/desktop-host.js ../browser --port 3030 --invite-host 10.0.2.2 --control 9400 --relay ../backend/jam-relay.js
+# 출력된 invite(jam://10.0.2.2:3030/…)를 앱에 붙여 넣고 참여
+curl -X POST http://127.0.0.1:9400/cmd -d '{"cmd":"send","msg":{"type":"navigate","url":"http://10.0.2.2:8088/","title":"테스트"}}'
+curl "http://127.0.0.1:9400/events?since=0"   # 호스트가 받은 메시지
+```
+
+Android 15 에뮬레이터(API 35)에서 확인한 것: 초대 링크로 참여(직접 · 중계 서버 모두, 승인 대기 → 수락), 호스트 이동 따라가기, 폰 링크 이동이 호스트에 전달,
+PC 커서 · 화면 사각형이 폰 페이지의 같은 문단 위에 그려짐, 폰 터치가 커서 + 클릭으로 전달, 영상 재생 위치 · 일시정지 맞춤,
+다른 사이트 잠금 안내, 로그인 대기(주소 비공개 → 로그인 뒤 Jam 최신 페이지로), APK 다운로드 격리, 명령어 복사 경고,
+그리고 소리 차단(영상은 실제로 muted · 볼륨 0, Web Audio 출력은 볼륨 0 노드).
+
+> 참고: 페이지가 Web Audio를 켜면 안드로이드에는 앱의 오디오 출력 스트림이 "열림"으로 보일 수 있어요. 그 스트림으로 나가는 소리는 볼륨 0(무음)이에요.
+
 ## 구조
 
 ```

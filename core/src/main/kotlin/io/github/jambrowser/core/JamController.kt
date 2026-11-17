@@ -311,7 +311,7 @@ class JamController(
                         host.changed(Change.LOGIN) // 로그인 중에는 이동하지 않고, 로그인 뒤 갈 곳만 최신으로
                     } else {
                         lastSyncedUrl = url
-                        if (tabUrl != url) host.loadInJamTab(url)
+                        if (!sameUrl(tabUrl, url)) host.loadInJamTab(url)
                     }
                 }
                 host.changed(Change.NOW)
@@ -437,7 +437,7 @@ class JamController(
             host.changed(Change.NOW)
             return
         }
-        if (url == lastSyncedUrl) return host.changed(Change.NOW)
+        if (sameUrl(url, lastSyncedUrl)) return host.changed(Change.NOW)
         // 따라가기를 켜 둔 상태에서, 이동할 수 있는 곳이면 모두 함께 이동
         if (follow && canGo(url)) {
             lastSyncedUrl = url
@@ -703,6 +703,9 @@ class JamController(
     fun kick(id: String) = send(buildJsonObject { put("type", "kick"); put("id", id) })
     fun setAllowAll(allow: Boolean) = send(buildJsonObject { put("type", "settings"); put("allowAllCrossSite", allow) })
     fun setAccess(mode: String) = send(buildJsonObject { put("type", "settings"); put("access", mode) })
+
+    /** 끝의 / 만 다른 주소는 같은 주소 (https://a.com 과 https://a.com/ — 웹뷰가 붙여서 돌려준다) */
+    private fun sameUrl(a: String?, b: String?) = a != null && b != null && a.trimEnd('/') == b.trimEnd('/')
 
     // ---------------- 파싱 ----------------
     private fun applySettings(s: JsonObject) {

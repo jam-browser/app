@@ -54,8 +54,10 @@ class DownloadGuard(private val ctx: Context) {
             toast("이 형식의 다운로드(${url.substringBefore(':')})는 아직 지원하지 않아요")
             return
         }
-        val name = URLUtil.guessFileName(url, contentDisposition, mimeType).replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val risky = isRisky(name, mimeType)
+        val name = fileNameOf(url, contentDisposition, mimeType)
+        // 서버가 이름 · 종류를 속여도 주소의 확장자가 설치 파일이면 위험한 것으로 본다
+        val urlExt = extOf(Uri.parse(url).lastPathSegment.orEmpty())
+        val risky = isRisky(name, mimeType) || urlExt in RISKY_EXT
         val size = if (length > 0) Formatter.formatShortFileSize(ctx, length) else "크기 모름"
         val msg = buildString {
             append("파일: $name\n크기: $size\n사이트: ${Site.pretty(pageUrl ?: url)}\n")
@@ -72,6 +74,23 @@ class DownloadGuard(private val ctx: Context) {
             .setNegativeButton("취소", null)
             .setPositiveButton(if (risky) "보관함에 받기" else "받기") { _, _ -> enqueue(url, userAgent, name, mimeType, risky) }
             .show()
+    }
+
+    /**
+     * 받을 파일 이름. URLUtil.guessFileName 은 종류가 application/octet-stream 이면
+     * 'app.apk' 를 'app.bin' 으로 바꿔 버려서 설치 파일 검사를 피해 갈 수 있다 → 직접 정한다
+     *   1) Content-Disposition 의 filename*= / filename=   2) 주소의 마지막 경로   3) 그래도 없으면 guessFileName
+     */
+    private fun fileNameOf(url: String, contentDisposition: String?, mimeType: String?): String {
+        val cd = contentDisposition.orEmpty()
+        val star = Regex("filename\\*\\s*=\\s*(?:UTF-8|utf-8)?''([^;]+)", RegexOption.IGNORE_CASE).find(cd)?.groupValues?.get(1)
+            ?.let { try { java.net.URLDecoder.decode(it.trim('"', ' '), "UTF-8") } catch (_: Exception) { null } }
+        val plain = Regex("filename\\s*=\\s*\"?([^\";]+)\"?", RegexOption.IGNORE_CASE).find(cd)?.groupValues?.get(1)?.trim()
+        val fromUrl = Uri.parse(url).lastPathSegment?.takeIf { it.contains('.') }
+        val raw = star ?: plain ?: fromUrl ?: URLUtil.guessFileName(url, contentDisposition, mimeType)
+        return raw.substringAfterLast('/').substringAfterLast('\\')
+            .replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_")
+            .trim().trimStart('.').ifEmpty { "download" }.take(150)
     }
 
     private fun enqueue(url: String, userAgent: String, name: String, mime: String?, risky: Boolean) {

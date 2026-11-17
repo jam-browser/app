@@ -22,7 +22,9 @@ const opt = (name) => {
   return i >= 0 ? args[i + 1] : null;
 };
 const access = opt('--access') || 'approval';
-const relayPath = opt('--relay');
+const bindHost = opt('--host') || '127.0.0.1';
+const inviteHost = opt('--invite-host') || '127.0.0.1';
+const relayPath = opt('--relay') ? path.resolve(opt('--relay')) : null;
 
 // ws 모듈은 데스크톱 저장소의 node_modules 에서 찾는다
 const req = (m) => require(require.resolve(m, { paths: [desktopDir, path.dirname(relayPath || desktopDir)] }));
@@ -30,11 +32,14 @@ const WebSocket = req('ws');
 const { createJamServer } = require(path.join(desktopDir, 'server', 'jam-server.js'));
 const { newSecret, deriveKeys, seal, open, C2S, S2C } = require(path.join(desktopDir, 'shared', 'jam-crypto.js'));
 
-const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+const out = (o) => {
+  process.stdout.write(JSON.stringify(o) + '\n');
+  if (global.__record) global.__record(o);
+};
 
 async function main() {
   const relayKey = crypto.randomBytes(24).toString('base64url');
-  const jam = await createJamServer({ port: 0, host: '127.0.0.1', localCreateOnly: false, relayKey });
+  const jam = await createJamServer({ port: Number(opt('--port') || 0), host: bindHost, localCreateOnly: false, relayKey });
   let relay = null;
   let tunnel = null;
   const seen = [];
@@ -73,7 +78,7 @@ async function main() {
         code,
         secret,
         hostId: msg.you.id,
-        invite: `jam://127.0.0.1:${jam.port}/${code}/${secret}`,
+        invite: `jam://${inviteHost}:${jam.port}/${code}/${secret}`,
         relayInvite: tunnel ? `jamr://127.0.0.1:${relay.port}/${tunnel.route}/${code}/${secret}` : null,
       });
       return;
@@ -85,14 +90,47 @@ async function main() {
   });
   ws.on('close', () => out({ ev: 'host-closed' }));
 
+  // --control <포트>: 127.0.0.1 HTTP 로도 같은 명령을 받는다 (에뮬레이터 수동 확인용)
+  //   POST /cmd  {"cmd":"send","msg":{...}}     GET /events?since=N  → 그동안 쌓인 이벤트
+  const controlPort = opt('--control');
+  if (controlPort) {
+    const http = require('http');
+    const log = [];
+    global.__record = (o) => log.push(o);
+    http
+      .createServer((q, s) => {
+        if (q.method === 'GET' && q.url.startsWith('/events')) {
+          const since = Number(new URL(q.url, 'http://x').searchParams.get('since') || 0);
+          s.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          return s.end(JSON.stringify({ next: log.length, events: log.slice(since) }));
+        }
+        let body = '';
+        q.on('data', (d) => (body += d));
+        q.on('end', () => {
+          try {
+            handle(JSON.parse(body));
+          } catch (e) {
+            s.writeHead(400);
+            return s.end(String(e));
+          }
+          s.writeHead(200);
+          s.end('ok');
+        });
+      })
+      .listen(Number(controlPort), '127.0.0.1');
+  }
+
   const rl = readline.createInterface({ input: process.stdin });
-  rl.on('line', async (line) => {
-    let c;
+  rl.on('line', (line) => {
     try {
-      c = JSON.parse(line);
-    } catch {
-      return;
-    }
+      handle(JSON.parse(line));
+    } catch {}
+  });
+  rl.on('close', () => {
+    if (!controlPort) process.exit(0);
+  });
+
+  async function handle(c) {
     if (c.cmd === 'send') send(c.msg);
     else if (c.cmd === 'drop-guests') {
       // 와이파이 끊김 흉내: 서버 쪽에서 손님 연결을 강제로 끊는다
@@ -110,8 +148,7 @@ async function main() {
       if (relay) await relay.close();
       process.exit(0);
     }
-  });
-  rl.on('close', () => process.exit(0));
+  }
 }
 
 main().catch((e) => {
