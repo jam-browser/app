@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  같은 와이파이의 PC 호스트(jam://192.168.x.x:3030)와 중계 서버(jamr://)는 ws:// 로 연결된다.
+  내용은 Jam 프로토콜 자체가 AES-256-GCM 으로 암호화하므로 전송 계층의 평문 연결을 허용한다.
+  (http:// 웹사이트도 열 수 있어야 하므로 전체 허용)
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

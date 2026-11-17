@@ -1,0 +1,499 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical">
+
+    <!-- 위: 탭 수 · 주소창 · 메뉴 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingEnd="4dp">
+
+        <TextView
+            android:id="@+id/tabs_button"
+            android:layout_width="34dp"
+            android:layout_height="30dp"
+            android:background="@drawable/bg_field"
+            android:contentDescription="탭 목록"
+            android:gravity="center"
+            android:text="1"
+            android:textColor="@color/text"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/jam_flag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_chip"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp"
+            android:text="JAM"
+            android:textColor="@color/jam_green_dark"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <EditText
+            android:id="@+id/url"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_field"
+            android:hint="주소 또는 검색어"
+            android:imeOptions="actionGo"
+            android:importantForAutofill="no"
+            android:inputType="textUri"
+            android:paddingHorizontal="14dp"
+            android:selectAllOnFocus="true"
+            android:singleLine="true"
+            android:textColor="@color/text"
+            android:textColorHint="@color/muted"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/lock_flag"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:contentDescription="다른 사이트 이동 잠김"
+            android:text="🔒"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/menu_button"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:contentDescription="메뉴"
+            android:gravity="center"
+            android:text="⋮"
+            android:textColor="@color/text"
+            android:textSize="22sp" />
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/progress"
+        style="@style/Widget.AppCompat.ProgressBar.Horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:max="100"
+        android:progressTint="@color/jam_green"
+        android:visibility="invisible" />
+
+    <!-- 로그인 대기 · Jam 페이지와 다름 · 재연결 안내 -->
+    <LinearLayout
+        android:id="@+id/banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_banner"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="8dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/banner_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@color/text"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/banner_action"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="36dp"
+            android:text="Jam 페이지로" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/content"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <FrameLayout
+            android:id="@+id/web_holder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- 반응(이모지)이 떠오르는 층 -->
+        <FrameLayout
+            android:id="@+id/reaction_layer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="false"
+            android:focusable="false" />
+
+        <!-- Jam 패널 (아래에서 올라옴) -->
+        <LinearLayout
+            android:id="@+id/panel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="bottom"
+            android:layout_marginTop="90dp"
+            android:background="@drawable/bg_panel"
+            android:clickable="true"
+            android:elevation="12dp"
+            android:focusable="true"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="8dp">
+
+                <TextView
+                    android:id="@+id/seg_people"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:padding="8dp"
+                    android:text="사람"
+                    android:textColor="@color/text"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/seg_chat"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:padding="8dp"
+                    android:text="채팅"
+                    android:textColor="@color/text"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/seg_queue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:padding="8dp"
+                    android:text="대기열"
+                    android:textColor="@color/text"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/panel_status"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:gravity="end"
+                    android:paddingHorizontal="6dp"
+                    android:singleLine="true"
+                    android:textColor="@color/muted"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/panel_close"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:contentDescription="패널 닫기"
+                    android:gravity="center"
+                    android:text="✕"
+                    android:textColor="@color/text"
+                    android:textSize="18sp" />
+            </LinearLayout>
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
+
+                <!-- 참여하기 (Jam 밖) -->
+                <ScrollView
+                    android:id="@+id/page_join"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="친구의 Jam에 참여하기"
+                            android:textColor="@color/text"
+                            android:textSize="20sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="PC의 Jam Browser에서 받은 초대 코드(jam://… 또는 jamr://…)를 붙여 넣으세요. 로그인은 각자 자기 폰에서 따로 해요 — 비밀번호나 쿠키는 폰 밖으로 나가지 않아요."
+                            android:textColor="@color/muted"
+                            android:textSize="13sp" />
+
+                        <EditText
+                            android:id="@+id/name"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:layout_marginTop="16dp"
+                            android:background="@drawable/bg_field"
+                            android:hint="내 이름 (다른 사람에게 보여요)"
+                            android:importantForAutofill="no"
+                            android:inputType="textPersonName"
+                            android:maxLength="24"
+                            android:paddingHorizontal="14dp"
+                            android:singleLine="true"
+                            android:textColor="@color/text"
+                            android:textColorHint="@color/muted" />
+
+                        <EditText
+                            android:id="@+id/invite"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:background="@drawable/bg_field"
+                            android:gravity="top"
+                            android:hint="초대 코드 (jam://주소/코드/비밀키)"
+                            android:importantForAutofill="no"
+                            android:inputType="textUri|textMultiLine|textNoSuggestions"
+                            android:minHeight="72dp"
+                            android:padding="14dp"
+                            android:textColor="@color/text"
+                            android:textColorHint="@color/muted"
+                            android:textSize="13sp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/paste_invite"
+                                style="@style/Widget.Material3.Button.OutlinedButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="붙여넣기" />
+
+                            <Button
+                                android:id="@+id/join"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:text="참여하기" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/join_status"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:textColor="@color/muted"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="20dp"
+                            android:text="· 같은 와이파이의 PC: jam://192.168.…:3030/코드/비밀키\n· 인터넷(중계 서버): jamr://중계주소/경로/코드/비밀키\n· 초대 코드의 비밀키는 서버로 보내지 않고, 모든 대화 · 이동 · 커서는 그 키로 암호화돼요.\n· 폰은 지금 손님으로만 참여할 수 있어요 (호스트는 PC에서)."
+                            android:textColor="@color/muted"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </ScrollView>
+
+                <!-- 사람 -->
+                <ScrollView
+                    android:id="@+id/page_people"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:id="@+id/people"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="12dp" />
+                </ScrollView>
+
+                <!-- 채팅 -->
+                <LinearLayout
+                    android:id="@+id/page_chat"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <ScrollView
+                        android:id="@+id/chat_scroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1">
+
+                        <LinearLayout
+                            android:id="@+id/chat"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:padding="12dp" />
+                    </ScrollView>
+
+                    <LinearLayout
+                        android:id="@+id/reactions"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:orientation="horizontal" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="8dp">
+
+                        <EditText
+                            android:id="@+id/chat_input"
+                            android:layout_width="0dp"
+                            android:layout_height="44dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_field"
+                            android:hint="메시지"
+                            android:imeOptions="actionSend"
+                            android:importantForAutofill="no"
+                            android:inputType="text"
+                            android:maxLength="500"
+                            android:paddingHorizontal="14dp"
+                            android:singleLine="true"
+                            android:textColor="@color/text"
+                            android:textColorHint="@color/muted" />
+
+                        <Button
+                            android:id="@+id/chat_send"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:text="보내기" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- 대기열 -->
+                <ScrollView
+                    android:id="@+id/page_queue"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <TextView
+                            android:id="@+id/now_playing"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/text"
+                            android:textSize="14sp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/queue_add_current"
+                                style="@style/Widget.Material3.Button.OutlinedButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="지금 페이지 추가" />
+
+                            <Button
+                                android:id="@+id/queue_next"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:text="다음 열기" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/queue"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+                </ScrollView>
+            </FrameLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- 아래: 뒤로 · 앞으로 · 새로고침 · 대기열 · Jam -->
+    <LinearLayout
+        android:id="@+id/bottom_bar"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/back"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="뒤로"
+            android:gravity="center"
+            android:text="◀"
+            android:textColor="@color/text"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/forward"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="앞으로"
+            android:gravity="center"
+            android:text="▶"
+            android:textColor="@color/text"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/reload"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="새로고침"
+            android:gravity="center"
+            android:text="⟳"
+            android:textColor="@color/text"
+            android:textSize="20sp" />
+
+        <TextView
+            android:id="@+id/jam_button"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginHorizontal="10dp"
+            android:layout_weight="1.6"
+            android:background="@drawable/bg_chip"
+            android:contentDescription="Jam 패널 열기"
+            android:gravity="center"
+            android:text="Jam"
+            android:textColor="@color/jam_green_dark"
+            android:textStyle="bold" />
+    </LinearLayout>
+</LinearLayout>

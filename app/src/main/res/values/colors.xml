@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="jam_green">#2EE6A6</color>
+    <color name="jam_green_dark">#062A1F</color>
+    <color name="bg">#FFFFFF</color>
+    <color name="surface">#F2F3F5</color>
+    <color name="text">#16181D</color>
+    <color name="muted">#6B7280</color>
+    <color name="danger">#E5484D</color>
+    <color name="warn_bg">#FFF4D6</color>
+</resources>

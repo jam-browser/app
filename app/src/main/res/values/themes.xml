@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.JamBrowser" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/jam_green</item>
+        <item name="colorOnPrimary">@color/jam_green_dark</item>
+        <item name="colorSecondary">@color/jam_green</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">@bool/light_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/light_bars</item>
+        <!-- 앱은 어떤 소리도 내지 않는다: 버튼 클릭음 끄기 -->
+        <item name="android:soundEffectsEnabled">false</item>
+    </style>
+</resources>
