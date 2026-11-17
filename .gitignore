@@ -1,0 +1,22 @@
+# 빌드 결과
+build/
+.gradle/
+*.apk
+*.aab
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 개인 설정 (SDK 경로 · 서명 키 · 내 서버 주소)
+local.properties
+LOCAL-SETUP.md
+*.jks
+*.keystore
+keystore.properties
+
+# 편집기
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
