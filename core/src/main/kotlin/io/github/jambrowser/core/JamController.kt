@@ -109,6 +109,11 @@ class JamController(
         set(v) { field = v; host.changed(Change.STATE) }
     var followingId: String? = null; private set
 
+    /** 핑 찍기 · 보기 (데스크톱 설정 pingEnabled · pingSeconds · pingToastOther 와 같음) */
+    var pingEnabled = true
+    var pingSeconds = 6
+    var pingToastOther = true
+
     var inAd = false; private set
     var loginWait = false; private set
     var reconnectAttempt = 0; private set
@@ -227,6 +232,7 @@ class JamController(
         youId = null; hostId = null; code = ""
         members = emptyList(); queue = emptyList(); current = null
         media = null; inAd = false; loginWait = false; myView = null; followingId = null
+        pingAsk = null
         requests.clear()
         resume = null
         host.changed(Change.STATE)
@@ -250,6 +256,7 @@ class JamController(
         media = room.obj("media")?.let(::parseMedia)
         if (firstJoin) {
             host.chat(ChatLine(true, "", "", "Jam에 오신 걸 환영해요. JAM 탭에서는 같은 사이트 안이라면 누구나 페이지를 넘길 수 있어요.", false))
+            if (pingEnabled) host.chat(ChatLine(true, "", "", "📍 화면을 길게 누르면 핑 휠이 열려요: 끌어서 위 ⚠️ 조심 · 아래 ❓ 뭐지? · 오른쪽 👀 이거 봐 · 왼쪽 🏃 갈게요, 그대로 놓으면 📍 여기", false))
             val cur = current
             lastSyncedUrl = cur?.url
             if (cur != null) host.loadInJamTab(cur.url)
@@ -354,6 +361,17 @@ class JamController(
             "chat" -> host.chat(ChatLine(false, msg.str("name") ?: "", msg.str("color") ?: "#888", msg.str("text") ?: "", msg.str("by") == youId))
             "system" -> host.chat(ChatLine(true, "", "", msg.str("text") ?: "", false))
             "reaction" -> host.reaction(msg.str("emoji") ?: return, msg.str("color") ?: "#888")
+            "ping" -> {
+                // 다른 사람이 찍은 핑: 같은 페이지면 그 자리에, 아니면 알림
+                val m = member(msg.str("by")) ?: return
+                if (!pingEnabled) return
+                val k = pingKind(msg.str("k"))
+                if (Site.sameDoc(msg.str("url"), host.jamTabUrl())) {
+                    host.toPage("jam:ping", pingShow("${m.id}-${clock()}", m.name, m.color, msg["x"], msg["y"], msg["a"], k))
+                } else if (pingToastOther) {
+                    host.toast("${PING_ICON[k]} ${m.name}님이 다른 페이지(${Site.pretty(msg.str("url"))})에 핑을 찍었어요")
+                }
+            }
             "queue" -> {
                 queue = parseQueue(msg["queue"])
                 host.changed(Change.QUEUE)
@@ -602,6 +620,13 @@ class JamController(
                 }
             }
             "jam:media-ready" -> applyMedia()
+            "jam:ping" -> {
+                // 앱(핑 휠)이 부탁한 핑에만 답한다. 페이지 스크립트가 마음대로 핑을 보내지 못하게
+                val ask = pingAsk ?: return
+                pingAsk = null
+                if (o == null || clock() - ask.second > 3000 || !Site.isShareable(url)) return
+                sendPing(url!!, o["x"], o["y"], o["a"], ask.first)
+            }
         }
     }
 
@@ -674,6 +699,57 @@ class JamController(
     }
 
     // ======================================================================
+    // 핑 (📍 여기 · ❓ 뭐지? · 👀 이거 봐 · ⚠️ 조심 · 🏃 갈게요)
+    // ======================================================================
+    private var pingAsk: Pair<String, Long>? = null
+    private var pingTokens = PING_BURST.toDouble()
+    private var pingAt = -1L
+
+    /** 서버와 같은 도배 방지 (순간 6개, 초당 2개). 쓸 수 있으면 하나 쓰고 true */
+    fun takePingToken(): Boolean {
+        val now = clock()
+        if (pingAt >= 0) pingTokens = minOf(PING_BURST.toDouble(), pingTokens + (now - pingAt) / 1000.0 * PING_PER_SEC)
+        pingAt = now
+        if (pingTokens < 1) return false
+        pingTokens -= 1
+        return true
+    }
+
+    /** 핑 휠을 놓았다: 화면의 (보이는 영역 비율 vx, vy) 자리를 페이지 스크립트가 앵커로 바꿔서 jam:ping 으로 돌려준다 */
+    fun requestPing(vx: Double, vy: Double, kind: String): Boolean {
+        if (!active || !pingEnabled) return false
+        if (!Site.isShareable(host.jamTabUrl())) {
+            host.toast("이 페이지에는 핑을 찍을 수 없어요 (로그인 · 결제 페이지 등)")
+            return false
+        }
+        pingAsk = pingKind(kind) to clock()
+        host.toPage("jam:ping-at", buildJsonObject { put("vx", vx.coerceIn(0.0, 1.0)); put("vy", vy.coerceIn(0.0, 1.0)) })
+        return true
+    }
+
+    private fun sendPing(url: String, x: JsonElement?, y: JsonElement?, a: JsonElement?, k: String) {
+        if (!takePingToken()) return host.toast("핑을 너무 자주 찍었어요. 잠시 뒤에 다시 해 보세요")
+        send(buildJsonObject {
+            put("type", "ping"); put("url", url); put("x", x ?: JsonPrimitive(0)); put("y", y ?: JsonPrimitive(0)); put("a", a ?: JsonNull); put("k", k)
+        })
+        val me = you
+        host.toPage("jam:ping", pingShow("me-${clock()}", me?.name ?: "나", me?.color ?: "#2ee6a6", x, y, a, k))
+    }
+
+    /** 화면 미러링을 보면서 찍은 핑: 영상 안 위치(0~1) → 미러링하는 사람의 탭 위에 그려져 영상으로 모두에게 보인다 */
+    fun sendMirrorPing(x: Double, y: Double, kind: String): Boolean {
+        if (!active || !pingEnabled || x !in 0.0..1.0 || y !in 0.0..1.0) return false
+        if (!takePingToken()) { host.toast("핑을 너무 자주 찍었어요. 잠시 뒤에 다시 해 보세요"); return false }
+        return send(buildJsonObject { put("type", "mping"); put("x", x); put("y", y); put("k", pingKind(kind)) })
+    }
+
+    private fun pingShow(id: String, name: String, color: String, x: JsonElement?, y: JsonElement?, a: JsonElement?, k: String) = buildJsonObject {
+        put("id", id); put("name", name); put("color", color)
+        put("x", x ?: JsonPrimitive(0)); put("y", y ?: JsonPrimitive(0)); put("a", a ?: JsonNull)
+        put("k", k); put("sec", pingSeconds.coerceIn(2, 30))
+    }
+
+    // ======================================================================
     // 내가 하는 일
     // ======================================================================
     fun sendChat(text: String) {
@@ -706,6 +782,16 @@ class JamController(
 
     /** 끝의 / 만 다른 주소는 같은 주소 (https://a.com 과 https://a.com/ — 웹뷰가 붙여서 돌려준다) */
     private fun sameUrl(a: String?, b: String?) = a != null && b != null && a.trimEnd('/') == b.trimEnd('/')
+
+    companion object {
+        /** 휠 방향: 위 = 조심, 아래 = 뭐지?, 오른쪽 = 이거 봐, 왼쪽 = 갈게요, 그대로 = 여기 */
+        val PING_KINDS = listOf("here", "what", "look", "warn", "omw")
+        val PING_ICON = mapOf("here" to "📍", "what" to "❓", "look" to "👀", "warn" to "⚠️", "omw" to "🏃")
+        val PING_LABEL = mapOf("here" to "여기", "what" to "뭐지?", "look" to "이거 봐", "warn" to "조심", "omw" to "갈게요")
+        const val PING_BURST = 6
+        const val PING_PER_SEC = 2.0
+        fun pingKind(k: String?) = if (k in PING_KINDS) k!! else "here"
+    }
 
     // ---------------- 파싱 ----------------
     private fun applySettings(s: JsonObject) {

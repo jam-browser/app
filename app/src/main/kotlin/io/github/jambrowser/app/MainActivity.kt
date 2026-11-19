@@ -79,6 +79,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     private lateinit var progress: ProgressBar
     private lateinit var webHolder: FrameLayout
     private lateinit var reactionLayer: FrameLayout
+    private lateinit var pingWheel: PingWheel
     private lateinit var panel: View
     private lateinit var banner: View
     private lateinit var bannerText: TextView
@@ -128,6 +129,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         downloads = DownloadGuard(this)
         clipboard = ClipboardGuard(this)
         jam = JamController(this, { inv, name, resume, l -> JamConnection(http, inv, name, resume, l).start() })
+        jam.pingEnabled = prefs.getBoolean("pingEnabled", true)
         bindViews()
         newTab(homeUrl)
         handleIntent(intent)
@@ -181,6 +183,11 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         progress = findViewById(R.id.progress)
         webHolder = findViewById(R.id.web_holder)
         reactionLayer = findViewById(R.id.reaction_layer)
+        // 핑 휠: 웹 화면 · 반응 위, Jam 패널 아래
+        pingWheel = PingWheel(this)
+        findViewById<FrameLayout>(R.id.content).addView(
+            pingWheel, 2, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
         panel = findViewById(R.id.panel)
         banner = findViewById(R.id.banner)
         bannerText = findViewById(R.id.banner_text)
@@ -251,6 +258,10 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         wv.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         val tab = Tab(++tabSeq, this, wv)
         tabs += tab
+        // Jam 탭에서 길게 누르기 → 핑 휠 (개인 탭 · 로그인 페이지에서는 평소처럼 글자 선택)
+        wv.setOnTouchListener(PingGesture(wv, pingWheel, { tab == jamTab && jam.active && jam.pingEnabled && Site.isShareable(tab.url) }) { fx, fy, k ->
+            jam.requestPing(fx, fy, k)
+        })
         if (url != null) tab.load(url)
         if (activate) activate(tab)
         renderTabs()
@@ -795,13 +806,14 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     }
 
     private fun showSettings() {
-        val items = arrayOf("자동 업데이트 확인")
-        val checked = booleanArrayOf(updater.enabled)
+        val items = arrayOf("자동 업데이트 확인", "핑 찍기 · 보기 (Jam 탭을 길게 누르기)")
+        val checked = booleanArrayOf(updater.enabled, jam.pingEnabled)
         AlertDialog.Builder(this)
             .setTitle("설정")
             .setMultiChoiceItems(items, checked) { _, i, v ->
                 when (i) {
                     0 -> updater.enabled = v
+                    1 -> { jam.pingEnabled = v; prefs.edit().putBoolean("pingEnabled", v).apply() }
                 }
             }
             .setPositiveButton("닫기", null)
