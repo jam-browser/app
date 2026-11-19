@@ -102,6 +102,15 @@ class DesktopHarness(access: String = "approval", relay: Boolean = false, extra:
 
     /** 미리 인코딩한 조각 파일로 화면 미러링 흉내 (desktop-host.js mirror-play) */
     fun play(file: String) = command(buildJsonObject { put("cmd", "mirror-play"); put("file", file) })
+    /** 호스트가 파일 공유 (desktop-host.js file-share) → file-shared 이벤트 {fid, sha, size} */
+    fun shareFile(file: String?, kind: String, name: String? = null, text: String? = null): JsonObject {
+        command(buildJsonObject {
+            put("cmd", "file-share"); put("kind", kind)
+            file?.let { put("file", it) }; name?.let { put("name", it) }; text?.let { put("text", it) }
+        })
+        return next("file-shared")
+    }
+    fun removeFile(fid: String) = command(buildJsonObject { put("cmd", "file-remove"); put("fid", fid) })
     fun stopMirror() = command(buildJsonObject { put("cmd", "mirror-stop") })
 
     fun dropGuests() {

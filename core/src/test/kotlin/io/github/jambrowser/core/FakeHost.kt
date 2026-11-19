@@ -43,5 +43,6 @@ class FakeHost : JamController.Host {
     override fun mirror(info: MirrorAssembler.Info?) { log += "mirror ${info?.sid} ${info?.title}" }
     override fun mirrorFrame(frame: MirrorAssembler.Frame) { log += "frame ${frame.f} ${if (frame.key) "key" else "delta"} ${frame.codec} ${frame.w}x${frame.h} ${frame.data.size}"; frames += frame }
     override fun mirrorPaused(paused: String?, secret: Boolean) { log += "mpaused $paused $secret" }
+    override fun fileReady(file: JamFiles.SharedFile, open: Boolean) { log += "fileReady ${file.name} $open" }
     val frames: MutableList<MirrorAssembler.Frame> = Collections.synchronizedList(ArrayList())
 }

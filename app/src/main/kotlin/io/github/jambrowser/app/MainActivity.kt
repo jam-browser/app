@@ -47,6 +47,7 @@ import io.github.jambrowser.core.Invite
 import io.github.jambrowser.core.JamConnection
 import io.github.jambrowser.core.JamController
 import io.github.jambrowser.core.JamController.Change
+import io.github.jambrowser.core.JamFiles
 import io.github.jambrowser.core.Nearby
 import io.github.jambrowser.core.NearbyPairing
 import io.github.jambrowser.core.Pairing
@@ -150,6 +151,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         bindViews()
         newTab(homeUrl)
         handleIntent(intent)
+        FileViewer.clearCache(this)
         updater = AppUpdater(this, http)
         updater.start()
         updater.handleDebugIntent(intent)
@@ -243,6 +245,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         findViewById<View>(R.id.seg_people).setOnClickListener { showPage(if (jam.active) "people" else "join") }
         findViewById<View>(R.id.seg_chat).setOnClickListener { if (jam.active) showPage("chat") else toast("먼저 Jam에 참여하세요") }
         findViewById<View>(R.id.seg_queue).setOnClickListener { if (jam.active) showPage("queue") else toast("먼저 Jam에 참여하세요") }
+        findViewById<View>(R.id.seg_files).setOnClickListener { if (jam.active) showPage("files") else toast("먼저 Jam에 참여하세요") }
         findViewById<View>(R.id.paste_invite).setOnClickListener {
             val t = getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
             val inv = Invite.find(t)
@@ -611,6 +614,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     override fun jamTabInFront(): Boolean = appInFront && active == jamTab && jamTab != null
 
     override fun loadInJamTab(url: String) {
+        // 같이 보는 파일(jamfile://)은 웹뷰가 아니라 받은 파일로 연다
+        if (JamFiles.fidOf(url) != null) return onJamFile(url)
         val t = jamTab ?: return
         lastRemoteNavAt = System.currentTimeMillis()
         t.load(url)
@@ -684,6 +689,74 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     override fun mirrorFrame(frame: io.github.jambrowser.core.MirrorAssembler.Frame) = mirrorView.frame(frame)
     override fun mirrorPaused(paused: String?, secret: Boolean) = mirrorView.setPaused(paused)
 
+    // ---------- 같이 보는 파일 ----------
+    override fun filesChanged() {
+        renderFiles()
+        renderBanner()
+    }
+
+    override fun fileReady(file: JamFiles.SharedFile, open: Boolean) {
+        renderFiles()
+        if (open) openFile(file)
+    }
+
+    /** Jam 이 공유 파일로 이동: 받았으면 열고, 아니면 받을지 묻는다 (처음 한 번) */
+    private fun onJamFile(url: String) {
+        val (f, ask) = jam.files.gate(url)
+        if (f != null && jam.files.local(f.fid) != null) return openFile(f)
+        if (!ask) return renderBanner()
+        val by = jam.member(f?.by)?.name ?: "호스트"
+        val what = if (f != null) "${f.icon} ${f.name} (${android.text.format.Formatter.formatShortFileSize(this, f.size)})" else "공유 파일"
+        AlertDialog.Builder(this)
+            .setTitle("📎 ${by}님이 파일을 열었어요")
+            .setMessage("$what\n\n받은 파일은 앱 안 메모리에만 있고, Jam 을 나가면 지워져요.")
+            .setPositiveButton("받아서 열기") { _, _ -> f?.let { jam.files.download(it.fid, open = true) } }
+            .setNegativeButton("나중에", null)
+            .show()
+        renderBanner()
+    }
+
+    private fun openFile(f: JamFiles.SharedFile) {
+        val local = jam.files.local(f.fid) ?: return
+        if (!f.viewable) return toast("${f.icon} 이 형식(${f.kind})은 폰에서 아직 열 수 없어요")
+        FileViewer(this, f, local).show()
+    }
+
+    private fun renderFiles() {
+        val box = findViewById<LinearLayout>(R.id.files_list)
+        box.removeAllViews()
+        if (!jam.active) return
+        val list = jam.files.list
+        if (list.isEmpty()) {
+            box.addView(TextView(this).apply { text = "아직 공유된 파일이 없어요."; setTextColor(getColor(R.color.muted)); textSize = 13f })
+        }
+        for (f in list) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(6)) }
+            val progress = jam.files.progress(f.fid)
+            val got = jam.files.local(f.fid) != null
+            val status = when {
+                !f.ready -> "올리는 중…"
+                progress != null -> "받는 중 ${(progress * 100).toInt()}%"
+                got -> "받음"
+                else -> "${jam.member(f.by)?.name ?: "호스트"}님 공유"
+            }
+            row.addView(TextView(this).apply {
+                text = "${f.icon} ${f.name}\n${android.text.format.Formatter.formatShortFileSize(this@MainActivity, f.size)} · $status"
+                setTextColor(getColor(R.color.text)); textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            if (f.ready && progress == null) {
+                row.addView(Button(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                    text = if (got) "열기" else "받아서 열기"
+                    isSoundEffectsEnabled = false
+                    setOnClickListener { if (got) openFile(f) else jam.files.download(f.fid, open = true) }
+                })
+            }
+            box.addView(row)
+        }
+        findViewById<TextView>(R.id.seg_files).text = if (list.isEmpty()) "파일" else "파일 ${list.size}"
+    }
+
     /** 미러링 화면 보이기 / 숨기기 (숨기면 영상을 받지 않는 것으로 친다) */
     private fun showMirror(show: Boolean) {
         if (jam.mirrorInfo == null) return
@@ -695,6 +768,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
 
     override fun ended(reason: String?) {
         requestDialog?.dismiss()
+        FileViewer.clearCache(this) // 받은 파일은 Jam 을 나가면 지운다
+        renderFiles()
         jamTab?.isJam = false
         jamTab = null
         renderAll()
@@ -726,6 +801,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         renderJamButton()
         renderPeople()
         renderQueue()
+        renderFiles()
         renderNow()
         renderBanner()
         renderRequests()
@@ -763,6 +839,18 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                 bannerAction.text = "지금 Jam으로"
                 bannerAction.isVisible = true
                 banner.isVisible = true
+            }
+            jam.active && inJamTab && JamFiles.fidOf(cur?.url) != null -> {
+                val f = jam.files.get(JamFiles.fidOf(cur?.url))
+                bannerText.text = "📎 Jam은 지금 공유 파일 \"${f?.name ?: cur?.title ?: "파일"}\" 을(를) 보고 있어요"
+                bannerAction.text = if (f != null && jam.files.local(f.fid) != null) "파일 열기" else "받아서 열기"
+                bannerAction.isVisible = true
+                bannerAction.setOnClickListener {
+                    if (f == null) return@setOnClickListener
+                    if (jam.files.local(f.fid) != null) openFile(f) else jam.files.download(f.fid, open = true)
+                }
+                banner.isVisible = true
+                return
             }
             jam.active && inJamTab && jam.isDrifted() -> {
                 bannerText.text = "Jam은 지금 \"${cur?.title?.ifEmpty { null } ?: Site.pretty(cur?.url)}\" 을(를) 보고 있어요" + if (!jam.follow) " (따라가기 꺼짐)" else ""
@@ -918,7 +1006,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         findViewById<View>(R.id.page_people).isVisible = p == "people"
         findViewById<View>(R.id.page_chat).isVisible = p == "chat"
         findViewById<View>(R.id.page_queue).isVisible = p == "queue"
-        val sel = mapOf("people" to R.id.seg_people, "join" to R.id.seg_people, "chat" to R.id.seg_chat, "queue" to R.id.seg_queue)
+        findViewById<View>(R.id.page_files).isVisible = p == "files"
+        val sel = mapOf("people" to R.id.seg_people, "join" to R.id.seg_people, "chat" to R.id.seg_chat, "queue" to R.id.seg_queue, "files" to R.id.seg_files)
         for ((k, id) in sel) findViewById<TextView>(id).alpha = if (k == p || (p == "join" && k == "people")) 1f else 0.45f
         findViewById<TextView>(R.id.seg_people).text = if (jam.active) "사람" else "참여"
         if (p == "chat") { unread = 0; renderJamButton() }

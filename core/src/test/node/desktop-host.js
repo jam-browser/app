@@ -178,6 +178,23 @@ async function main() {
     setTimeout(tick, 300);
   }
 
+  // 같이 보는 파일 흉내: 데스크톱 jamfiles.js 의 pack 으로 묶고 files.js 처럼 file-offer → file-up(32KB) → file-up-end
+  function fileShare(c) {
+    const fs = require('fs');
+    const { pack } = require(path.join(desktopDir, 'src', 'jamfiles.js'));
+    const name = c.name || path.basename(c.file);
+    const bytes = c.text != null ? Buffer.from(String(c.text), 'utf8') : fs.readFileSync(c.file);
+    const packed = pack([{ p: name, bytes }], name);
+    const sha = crypto.createHash('sha256').update(packed).digest('hex');
+    const fid = Array.from(crypto.randomBytes(16), (x) => 'abcdefghijklmnopqrstuvwxyz0123456789'[x % 36]).join('');
+    send({ type: 'file-offer', fid, name, kind: c.kind || 'pdf', size: packed.length, sha, entry: name, count: 1, net: false });
+    const PIECE = 32 * 1024;
+    const n = Math.ceil(packed.length / PIECE);
+    for (let i = 0; i < n; i++) send({ type: 'file-up', fid, i, d: packed.subarray(i * PIECE, (i + 1) * PIECE).toString('base64') });
+    send({ type: 'file-up-end', fid });
+    out({ ev: 'file-shared', fid, sha, size: packed.length });
+  }
+
   async function handle(c) {
     if (c.cmd === 'send') send(c.msg);
     else if (c.cmd === 'drop-guests') {
@@ -188,6 +205,10 @@ async function main() {
       out({ ev: 'dropped' });
     } else if (c.cmd === 'mirror-play') {
       mirrorPlay(c);
+    } else if (c.cmd === 'file-share') {
+      fileShare(c);
+    } else if (c.cmd === 'file-remove') {
+      send({ type: 'file-remove', fid: c.fid });
     } else if (c.cmd === 'mirror-stop') {
       clearTimeout(mirrorTimer);
       mirrorTimer = null;

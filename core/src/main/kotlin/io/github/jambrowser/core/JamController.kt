@@ -48,6 +48,10 @@ class JamController(
         fun mirrorFrame(frame: MirrorAssembler.Frame) {}
         /** 호스트가 영상을 잠시 멈춤 (typing · secret · page) / 다시 보냄(null) */
         fun mirrorPaused(paused: String?, secret: Boolean) {}
+        /** 같이 보는 파일 목록 · 받는 상태가 바뀜 */
+        fun filesChanged() {}
+        /** 파일을 다 받고 해시까지 확인함 (open = 받은 뒤 바로 열기) */
+        fun fileReady(file: JamFiles.SharedFile, open: Boolean) {}
     }
 
     fun interface Cancellable { fun cancel() }
@@ -240,6 +244,7 @@ class JamController(
         media = null; inAd = false; loginWait = false; myView = null; followingId = null
         pingAsk = null
         stopMirrorView()
+        files.reset()
         requests.clear()
         resume = null
         host.changed(Change.STATE)
@@ -259,6 +264,7 @@ class JamController(
         members = (room["members"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.let(Member::from) } ?: emptyList()
         queue = parseQueue(room["queue"])
         current = parseCurrent(room.obj("current"))
+        files.onWelcome(room["files"] as? JsonArray)
         room.obj("settings")?.let(::applySettings)
         media = room.obj("media")?.let(::parseMedia)
         if (firstJoin) {
@@ -395,6 +401,7 @@ class JamController(
                 if (info == null) stopMirrorView() else if (info.by != youId) openMirror(info)
             }
             "mv" -> onMirrorChunk(msg)
+            "file", "file-removed", "file-down" -> files.handle(msg)
             "mstate" -> if (msg.str("sid") == mirrorAsm.sid) host.mirrorPaused(msg.str("paused")?.takeIf { it in setOf("typing", "secret", "page") }, msg.bool("secret"))
             "mblock" -> host.toast("🛑 보호된 곳이라 원격 조작이 막혔어요")
             "control" -> host.toast("호스트가 화면 조작을 허락했지만, 폰에서는 아직 보기만 할 수 있어요")
@@ -714,6 +721,18 @@ class JamController(
         val v = m.view ?: return
         if (Site.sameDoc(v.str("url"), host.jamTabUrl())) host.toPage("jam:scroll-to-view", JsonObject(v + ("id" to JsonPrimitive(id))))
     }
+
+    // ======================================================================
+    // 같이 보는 파일
+    // ======================================================================
+    val files = JamFiles({ send(it) }, object : JamFiles.Listener {
+        override fun filesChanged() = host.filesChanged()
+        override fun fileReady(file: JamFiles.SharedFile, open: Boolean) {
+            if (!open) host.toast("📎 받았어요: ${file.name}")
+            host.fileReady(file, open)
+        }
+        override fun fileError(file: JamFiles.SharedFile?, message: String) = host.toast("📎 $message")
+    })
 
     // ======================================================================
     // 화면 미러링 보기

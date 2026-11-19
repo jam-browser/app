@@ -184,6 +184,15 @@
                     android:textStyle="bold" />
 
                 <TextView
+                    android:id="@+id/seg_files"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:padding="8dp"
+                    android:text="파일"
+                    android:textColor="@color/text"
+                    android:textStyle="bold" />
+
+                <TextView
                     android:id="@+id/panel_status"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -457,6 +466,35 @@
 
                         <LinearLayout
                             android:id="@+id/queue"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+                </ScrollView>
+
+                <!-- 같이 보는 파일 -->
+                <ScrollView
+                    android:id="@+id/page_files"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="호스트가 공유한 PDF · 이미지 · 텍스트를 받아서 볼 수 있어요. 받은 파일은 앱 안 메모리에만 있고, 다운로드 폴더에는 저장되지 않아요. Jam 을 나가면 지워져요."
+                            android:textColor="@color/muted"
+                            android:textSize="12sp" />
+
+                        <LinearLayout
+                            android:id="@+id/files_list"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
