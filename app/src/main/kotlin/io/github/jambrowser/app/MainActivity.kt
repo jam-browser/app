@@ -84,6 +84,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     private lateinit var webHolder: FrameLayout
     private lateinit var reactionLayer: FrameLayout
     private lateinit var pingWheel: PingWheel
+    private lateinit var mirrorView: MirrorView
     private lateinit var panel: View
     private lateinit var banner: View
     private lateinit var bannerText: TextView
@@ -141,6 +142,11 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         clipboard = ClipboardGuard(this)
         jam = JamController(this, { inv, name, resume, l -> JamConnection(http, inv, name, resume, l).start() })
         jam.pingEnabled = prefs.getBoolean("pingEnabled", true)
+        // 화면 미러링: 웹 화면 · 핑 휠 위, Jam 패널 아래
+        mirrorView = MirrorView(this, jam) { showMirror(false) }
+        findViewById<FrameLayout>(R.id.content).addView(
+            mirrorView, 3, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
         bindViews()
         newTab(homeUrl)
         handleIntent(intent)
@@ -153,6 +159,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                 when {
                     fullscreenView != null -> showFullscreen(null, null)
                     panel.isVisible -> showPanel(false)
+                    mirrorView.isVisible -> showMirror(false)
                     active?.webView?.canGoBack() == true -> active?.webView?.goBack()
                     tabs.size > 1 && active != jamTab -> closeTab(active!!)
                     else -> { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
@@ -664,6 +671,28 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         tv.animate().translationY(-reactionLayer.height * 0.6f).alpha(0f).setDuration(1800).withEndAction { reactionLayer.removeView(tv) }.start()
     }
 
+    override fun mirror(info: io.github.jambrowser.core.MirrorAssembler.Info?) {
+        if (info == null) {
+            mirrorView.close()
+        } else {
+            mirrorView.open(info)
+            showMirror(true)
+        }
+        renderBanner()
+    }
+
+    override fun mirrorFrame(frame: io.github.jambrowser.core.MirrorAssembler.Frame) = mirrorView.frame(frame)
+    override fun mirrorPaused(paused: String?, secret: Boolean) = mirrorView.setPaused(paused)
+
+    /** 미러링 화면 보이기 / 숨기기 (숨기면 영상을 받지 않는 것으로 친다) */
+    private fun showMirror(show: Boolean) {
+        if (jam.mirrorInfo == null) return
+        mirrorView.isVisible = show
+        jam.mirrorHidden = !show
+        if (show) showPanel(false)
+        renderBanner()
+    }
+
     override fun ended(reason: String?) {
         requestDialog?.dismiss()
         jamTab?.isJam = false
@@ -720,6 +749,14 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                 bannerText.text = "📶 Jam 연결이 끊겨서 다시 연결하는 중이에요… (${jam.reconnectAttempt}/5)"
                 bannerAction.isVisible = false
                 banner.isVisible = true
+            }
+            jam.active && jam.mirrorInfo != null && !mirrorView.isVisible -> {
+                bannerText.text = "🖥 ${jam.member(jam.mirrorInfo?.by)?.name ?: "호스트"}님이 화면 미러링 중이에요"
+                bannerAction.text = "보기"
+                bannerAction.isVisible = true
+                bannerAction.setOnClickListener { showMirror(true) }
+                banner.isVisible = true
+                return
             }
             jam.active && jam.loginWait && inJamTab -> {
                 bannerText.text = "🔐 로그인 중이에요. 내 로그인 창은 나만 보여요 — 로그인을 마치면 \"${cur?.title?.ifEmpty { null } ?: Site.pretty(cur?.url)}\" 로 자동으로 이동해요"

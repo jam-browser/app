@@ -42,6 +42,12 @@ class JamController(
         fun reaction(emoji: String, color: String) {}
         /** Jam 이 끝났거나 연결이 완전히 끊김 (이유 문장) */
         fun ended(reason: String?) {}
+        /** 화면 미러링 시작(info) · 끝(null) */
+        fun mirror(info: MirrorAssembler.Info?) {}
+        /** 디코더에 넣을 영상 프레임 (메인 스레드) */
+        fun mirrorFrame(frame: MirrorAssembler.Frame) {}
+        /** 호스트가 영상을 잠시 멈춤 (typing · secret · page) / 다시 보냄(null) */
+        fun mirrorPaused(paused: String?, secret: Boolean) {}
     }
 
     fun interface Cancellable { fun cancel() }
@@ -233,6 +239,7 @@ class JamController(
         members = emptyList(); queue = emptyList(); current = null
         media = null; inAd = false; loginWait = false; myView = null; followingId = null
         pingAsk = null
+        stopMirrorView()
         requests.clear()
         resume = null
         host.changed(Change.STATE)
@@ -271,6 +278,8 @@ class JamController(
         myView?.let { publishViewport(it) }
         refreshAllViews()
         applyMedia()
+        val mir = MirrorAssembler.Info.from(room.obj("mirror"))
+        if (mir != null && mir.by != youId) openMirror(mir)
     }
 
     // ======================================================================
@@ -381,6 +390,14 @@ class JamController(
                 host.changed(Change.SETTINGS)
                 applyLock()
             }
+            "mirror" -> {
+                val info = MirrorAssembler.Info.from(msg.obj("mirror"))
+                if (info == null) stopMirrorView() else if (info.by != youId) openMirror(info)
+            }
+            "mv" -> onMirrorChunk(msg)
+            "mstate" -> if (msg.str("sid") == mirrorAsm.sid) host.mirrorPaused(msg.str("paused")?.takeIf { it in setOf("typing", "secret", "page") }, msg.bool("secret"))
+            "mblock" -> host.toast("🛑 보호된 곳이라 원격 조작이 막혔어요")
+            "control" -> host.toast("호스트가 화면 조작을 허락했지만, 폰에서는 아직 보기만 할 수 있어요")
             "error" -> host.toast(msg.str("message") ?: "오류가 났어요")
             "join-request" -> {
                 val id = msg.str("id") ?: return
@@ -696,6 +713,91 @@ class JamController(
         val m = member(id) ?: return
         val v = m.view ?: return
         if (Site.sameDoc(v.str("url"), host.jamTabUrl())) host.toPage("jam:scroll-to-view", JsonObject(v + ("id" to JsonPrimitive(id))))
+    }
+
+    // ======================================================================
+    // 화면 미러링 보기
+    // ======================================================================
+    private val mirrorAsm = MirrorAssembler { clock().toDouble() }
+    var mirrorInfo: MirrorAssembler.Info? = null; private set
+    /** 미러링 화면을 숨겼으면 피드백(mfb)을 보내지 않는다 (데스크톱 v.hidden 과 같음) */
+    var mirrorHidden = false
+        set(v) { field = v; if (!v) mirrorRestart() }
+    private var mirrorBad = false
+    private var mirrorLastKeyReq = -1_000_000L
+    private var mirrorTimer: Cancellable? = null
+
+    private fun openMirror(info: MirrorAssembler.Info) {
+        if (mirrorAsm.sid == info.sid) return
+        mirrorInfo = info
+        mirrorAsm.open(info.sid)
+        mirrorBad = false
+        mirrorHidden = false
+        host.mirror(info)
+        host.mirrorPaused(info.paused, info.secret)
+        requestMirrorKey(true)
+        mirrorTimer?.cancel()
+        mirrorTimer = host.schedule(1000, ::mirrorFeedback)
+    }
+
+    private fun stopMirrorView() {
+        mirrorTimer?.cancel()
+        mirrorTimer = null
+        if (mirrorInfo == null && mirrorAsm.sid == null) return
+        mirrorInfo = null
+        mirrorAsm.close()
+        host.mirror(null)
+    }
+
+    private fun onMirrorChunk(msg: JsonObject) {
+        when (val r = mirrorAsm.onChunk(msg)) {
+            null -> {}
+            is MirrorAssembler.Result.NeedKey -> requestMirrorKey(false)
+            is MirrorAssembler.Result.Decode -> host.mirrorFrame(r.frame)
+        }
+    }
+
+    /** 키프레임 요청 (1초에 한 번까지) */
+    fun requestMirrorKey(force: Boolean) {
+        if (mirrorAsm.sid == null || !active) return
+        val now = clock()
+        if (!force && now - mirrorLastKeyReq < 1000) return
+        mirrorLastKeyReq = now
+        send(buildJsonObject { put("type", "mkey") })
+    }
+
+    /** 화면 쪽: 새 화면(Surface)이 생겼다 → 다음 키프레임부터 */
+    fun mirrorRestart() {
+        mirrorAsm.resetToKey()
+        requestMirrorKey(true)
+    }
+
+    /** 화면 쪽 디코더: 한 프레임을 그렸다 */
+    fun mirrorDecoded() { mirrorAsm.frames++ }
+
+    /** 화면 쪽 디코더: 이 영상 형식을 못 풀거나 오류 → 호스트가 형식을 바꾸도록 알리고 키프레임부터 다시 */
+    fun mirrorDecodeFailed(unsupported: Boolean) {
+        if (unsupported) mirrorBad = true
+        mirrorAsm.resetToKey()
+        requestMirrorKey(false)
+    }
+
+    /** 화면 쪽 디코더가 밀림 → 건너뛰고 키프레임부터, 호스트에게 화질을 낮춰 달라고 */
+    fun mirrorBehind() {
+        mirrorAsm.late = maxOf(mirrorAsm.late, 1000.0)
+        mirrorAsm.resetToKey()
+        requestMirrorKey(false)
+    }
+
+    /** 1초마다: 받는 지연을 호스트에게 (호스트가 화질 조절) */
+    private fun mirrorFeedback() {
+        mirrorTimer = null
+        if (mirrorAsm.sid == null || !active) return
+        if (mirrorAsm.frames > 0 && !mirrorHidden) {
+            send(buildJsonObject { put("type", "mfb"); put("late", Math.round(mirrorAsm.late)); put("bad", mirrorBad) })
+        }
+        mirrorAsm.late = 0.0
+        mirrorTimer = host.schedule(1000, ::mirrorFeedback)
     }
 
     // ======================================================================

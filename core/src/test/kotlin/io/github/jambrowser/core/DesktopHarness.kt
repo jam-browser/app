@@ -100,6 +100,10 @@ class DesktopHarness(access: String = "approval", relay: Boolean = false, extra:
 
     fun send(msg: JsonObject) = command(buildJsonObject { put("cmd", "send"); put("msg", msg) })
 
+    /** 미리 인코딩한 조각 파일로 화면 미러링 흉내 (desktop-host.js mirror-play) */
+    fun play(file: String) = command(buildJsonObject { put("cmd", "mirror-play"); put("file", file) })
+    fun stopMirror() = command(buildJsonObject { put("cmd", "mirror-stop") })
+
     fun dropGuests() {
         command(buildJsonObject { put("cmd", "drop-guests") })
         next("dropped")

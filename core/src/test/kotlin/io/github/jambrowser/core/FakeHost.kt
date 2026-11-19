@@ -40,4 +40,8 @@ class FakeHost : JamController.Host {
     override fun changed(what: JamController.Change) {}
     override fun chat(line: JamController.ChatLine) { log += "chat ${line.text}" }
     override fun ended(reason: String?) { log += "ended $reason" }
+    override fun mirror(info: MirrorAssembler.Info?) { log += "mirror ${info?.sid} ${info?.title}" }
+    override fun mirrorFrame(frame: MirrorAssembler.Frame) { log += "frame ${frame.f} ${if (frame.key) "key" else "delta"} ${frame.codec} ${frame.w}x${frame.h} ${frame.data.size}"; frames += frame }
+    override fun mirrorPaused(paused: String?, secret: Boolean) { log += "mpaused $paused $secret" }
+    val frames: MutableList<MirrorAssembler.Frame> = Collections.synchronizedList(ArrayList())
 }

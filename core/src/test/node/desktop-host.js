@@ -144,6 +144,40 @@ async function main() {
     if (!controlPort) process.exit(0);
   });
 
+  // 화면 미러링 흉내: 미리 인코딩한 조각 파일(첫 줄 {codec,w,h,fps}, 다음 줄마다 {k,ts,d})을
+  // 데스크톱 mirror.js 의 sendChunk 와 똑같이 32KB 조각(mv)으로 보낸다. 끝나면 처음부터 다시 (loop)
+  let mirrorTimer = null;
+  function mirrorPlay(c) {
+    const fs = require('fs');
+    const lines = fs.readFileSync(c.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const head = lines.shift();
+    const sid = 'testmirror' + crypto.randomBytes(3).toString('hex');
+    clearTimeout(mirrorTimer);
+    send({ type: 'mirror-start', sid, w: head.w, h: head.h, title: c.title || '시험 화면' });
+    out({ ev: 'mirror-started', sid, codec: head.codec });
+    let f = 0;
+    let idx = 0;
+    const PIECE = 32 * 1024;
+    const tick = () => {
+      if (idx >= lines.length) {
+        if (!c.loop) return out({ ev: 'mirror-done', frames: f });
+        idx = 0;
+      }
+      const ch = lines[idx++];
+      const buf = Buffer.from(ch.d, 'base64');
+      const n = Math.max(1, Math.ceil(buf.length / PIECE));
+      const ts = Math.round(performance.now() * 1000);
+      for (let i = 0; i < n; i++) {
+        const m = { type: 'mv', sid, f, k: ch.k, i, n, ts, d: buf.subarray(i * PIECE, (i + 1) * PIECE).toString('base64') };
+        if (ch.k && i === 0) Object.assign(m, { w: head.w, h: head.h, c: head.codec });
+        send(m);
+      }
+      f++;
+      mirrorTimer = setTimeout(tick, 1000 / (head.fps || 15));
+    };
+    setTimeout(tick, 300);
+  }
+
   async function handle(c) {
     if (c.cmd === 'send') send(c.msg);
     else if (c.cmd === 'drop-guests') {
@@ -152,6 +186,12 @@ async function main() {
         for (const m of room.members.values()) if (m.id !== room.hostId) m.ws.terminate();
       }
       out({ ev: 'dropped' });
+    } else if (c.cmd === 'mirror-play') {
+      mirrorPlay(c);
+    } else if (c.cmd === 'mirror-stop') {
+      clearTimeout(mirrorTimer);
+      mirrorTimer = null;
+      send({ type: 'mirror-stop' });
     } else if (c.cmd === 'relay-seen') {
       const all = Buffer.concat(seen).toString('utf8');
       out({ ev: 'relay-seen', bytes: all.length, found: (c.find || []).filter((s) => all.includes(s)) });
