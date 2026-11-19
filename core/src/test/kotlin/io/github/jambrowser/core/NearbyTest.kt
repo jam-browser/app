@@ -51,9 +51,9 @@ class NearbyTest {
     @Test
     fun beaconParsing() {
         val ok = """{"t":"jam-nearby","v":1,"app":"0.3.0","id":"abcdEFGH1234","name":"민수의\u0007 PC","port":3030,"code":"AB2CD","access":"approval","n":2}""".toByteArray()
-        val b = Nearby.parseBeacon(ok, ok.size, "192.168.0.7")!!
+        val b = Nearby.parseBeacon(ok, ok.size, "10.20.30.40")!!
         assertEquals("민수의 PC", b.name)
-        assertEquals("ws://192.168.0.7:3030", b.server)
+        assertEquals("ws://10.20.30.40:3030", b.server)
         assertNull("인터넷 주소에서 온 알림은 무시", Nearby.parseBeacon(ok, ok.size, "8.8.8.8"))
         for (bad in listOf(
             """{"t":"jam-nearby","v":2,"id":"abcdEFGH1234","port":3030,"code":"AB2CD","access":"approval","n":2}""",
