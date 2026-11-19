@@ -7,6 +7,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -46,6 +47,9 @@ import io.github.jambrowser.core.Invite
 import io.github.jambrowser.core.JamConnection
 import io.github.jambrowser.core.JamController
 import io.github.jambrowser.core.JamController.Change
+import io.github.jambrowser.core.Nearby
+import io.github.jambrowser.core.NearbyPairing
+import io.github.jambrowser.core.Pairing
 import io.github.jambrowser.core.Site
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -102,6 +106,13 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var requestDialog: AlertDialog? = null
+    // 근처 Jam
+    private lateinit var nearbyList: LinearLayout
+    private lateinit var nearbyEmpty: TextView
+    private var scanner: Nearby.Scanner? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
+    private var pairing: NearbyPairing? = null
+    private var pairDialog: AlertDialog? = null
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val cb = fileCallback ?: return@registerForActivityResult
@@ -204,6 +215,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         chatInput = findViewById(R.id.chat_input)
         queueBox = findViewById(R.id.queue)
         nowPlaying = findViewById(R.id.now_playing)
+        nearbyList = findViewById(R.id.nearby_list)
+        nearbyEmpty = findViewById(R.id.nearby_empty)
 
         nameBox.setText(prefs.getString("name", ""))
 
@@ -247,6 +260,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                 setOnClickListener { jam.sendReaction(e) }
             })
         }
+        showPage(page)
         renderAll()
     }
 
@@ -450,6 +464,10 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         }
         val inv = Invite.find(inviteBox.text.toString())
             ?: return toast("초대 코드 형식이 올바르지 않아요. 호스트가 보낸 코드 전체(jam://주소/코드/비밀키)를 붙여 넣으세요")
+        joinWith(inv, name)
+    }
+
+    private fun joinWith(inv: Invite, name: String) {
         prefs.edit().putString("name", name).apply()
         hideKeyboard()
         // Jam 탭: 지금 탭을 쓴다 (Jam 페이지로 이동하게 됨)
@@ -460,6 +478,98 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         chatBox.removeAllViews()
         unread = 0
         jam.join(inv, name)
+    }
+
+    // ======================================================================
+    // 근처 Jam (같은 와이파이, 초대 링크 없이)
+    // ======================================================================
+    /** 참여 화면이 보이는 동안만 듣는다 (배터리) */
+    private fun updateNearbyScan() {
+        val want = panel.isVisible && page == "join" && jam.status == JamController.Status.IDLE && appInFront
+        if (want && scanner == null) {
+            val lock = try {
+                applicationContext.getSystemService(WifiManager::class.java)?.createMulticastLock("jam-nearby")?.apply { setReferenceCounted(false); acquire() }
+            } catch (_: Exception) { null }
+            val s = Nearby.Scanner({ list -> main.post { if (scanner != null) renderNearby(list) } })
+            if (!s.start()) {
+                lock?.release()
+                nearbyEmpty.text = "근처 찾기를 시작할 수 없어요 (UDP ${Nearby.PORT} 포트를 다른 앱이 쓰는 중이에요)"
+                return
+            }
+            multicastLock = lock
+            scanner = s
+            renderNearby(emptyList())
+        } else if (!want && scanner != null) {
+            scanner?.stop()
+            scanner = null
+            try { multicastLock?.release() } catch (_: Exception) {}
+            multicastLock = null
+        }
+    }
+
+    private fun renderNearby(list: List<Nearby.Beacon>) {
+        nearbyList.removeAllViews()
+        nearbyEmpty.text = if (list.isEmpty()) "찾는 중… 같은 와이파이의 PC에서 Jam을 시작하면 여기에 나타나요" else "PC에 뜨는 6자리 확인 코드가 내 화면과 같은지 확인하고 수락받아요"
+        for (b in list) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(6)) }
+            row.addView(TextView(this).apply {
+                text = "🖥 ${b.name}\n${b.n}명 · ${b.accessLabel} · ${b.ip}"
+                setTextColor(getColor(R.color.text)); textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(Button(this).apply {
+                text = "참여 요청"
+                isSoundEffectsEnabled = false
+                setOnClickListener { startPairing(b) }
+            })
+            nearbyList.addView(row)
+        }
+    }
+
+    private fun startPairing(b: Nearby.Beacon) {
+        val name = nameBox.text.toString().trim()
+        if (name.isEmpty()) {
+            nameBox.requestFocus()
+            return toast("먼저 이름을 입력해 주세요")
+        }
+        if (b.access == "friends") return toast("이 Jam은 호스트의 친구만 들어갈 수 있어요 (폰은 아직 계정 신원 확인을 지원하지 않아요)")
+        if (jam.status != JamController.Status.IDLE) return
+        hideKeyboard()
+        pairing?.cancel()
+        val sasView = TextView(this).apply {
+            text = "연결 중…"
+            textSize = 15f
+            setTextColor(getColor(R.color.text))
+            setPadding(dp(24), dp(12), dp(24), 0)
+        }
+        pairDialog?.dismiss()
+        pairDialog = AlertDialog.Builder(this)
+            .setTitle("${b.name}에 참여 요청")
+            .setView(sasView)
+            .setCancelable(false)
+            .setNegativeButton("취소") { _, _ -> pairing?.cancel() }
+            .show()
+        pairing = NearbyPairing(http, b, name, object : NearbyPairing.Listener {
+            override fun onSas(sas: String) = runOnMain {
+                sasView.text = SpannableStringBuilder().apply {
+                    append("확인 코드\n")
+                    val start = length
+                    append(Pairing.formatSas(sas))
+                    setSpan(android.text.style.RelativeSizeSpan(2.2f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(StyleSpan(android.graphics.Typeface.BOLD), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    append("\n\nPC 화면의 참여 요청에 같은 숫자가 보이는지 확인하세요. 숫자가 다르면 취소하세요 — 다른 기기가 끼어든 거예요.")
+                }
+            }
+            override fun onPending() = runOnMain { pairDialog?.setTitle("호스트의 수락을 기다리는 중…") }
+            override fun onDone(invite: Invite) = runOnMain {
+                pairDialog?.dismiss(); pairDialog = null; pairing = null
+                if (jam.status == JamController.Status.IDLE) joinWith(invite, name)
+            }
+            override fun onFailed(code: String, message: String) = runOnMain {
+                pairDialog?.dismiss(); pairDialog = null; pairing = null
+                if (code != "cancelled") { joinStatus.text = message; toast(message) }
+            }
+        }).start()
     }
 
     private fun sendChat() {
@@ -590,6 +700,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         renderNow()
         renderBanner()
         renderRequests()
+        updateNearbyScan()
     }
 
     private fun renderJamButton() {
@@ -759,6 +870,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
 
     private fun showPanel(show: Boolean) {
         panel.isVisible = show
+        updateNearbyScan()
         if (show && page == "chat") { unread = 0; renderJamButton() }
         if (!show) hideKeyboard()
     }
@@ -773,6 +885,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         for ((k, id) in sel) findViewById<TextView>(id).alpha = if (k == p || (p == "join" && k == "people")) 1f else 0.45f
         findViewById<TextView>(R.id.seg_people).text = if (jam.active) "사람" else "참여"
         if (p == "chat") { unread = 0; renderJamButton() }
+        updateNearbyScan()
     }
 
     private fun showMenu(anchor: View) {
@@ -876,6 +989,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         appInFront = true
         clipboard.refreshBaseline()
         updater.onResume()
+        updateNearbyScan()
         active?.webView?.onResume()
         if (jam.active) jam.onJamTabFrontChanged()
     }
@@ -884,12 +998,16 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         super.onPause()
         appInFront = false
         if (jam.active) jam.onJamTabFrontChanged()
+        updateNearbyScan()
         // Jam 탭이 아니면 멈춘다 (배터리). Jam 탭은 연결이 살아 있는 동안 계속 동기화
         active?.takeIf { it != jamTab }?.webView?.onPause()
     }
 
     override fun onDestroy() {
         if (isFinishing) jam.leave()
+        pairing?.cancel()
+        scanner?.stop()
+        try { multicastLock?.release() } catch (_: Exception) {}
         updater.stop()
         tabs.forEach { it.destroy() }
         tabs.clear()

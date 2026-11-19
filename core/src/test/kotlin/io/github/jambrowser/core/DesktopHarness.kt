@@ -52,7 +52,7 @@ object Env {
 }
 
 /** core/src/test/node/desktop-host.js 를 띄워서 데스크톱 호스트 역할을 시킨다 */
-class DesktopHarness(access: String = "approval", relay: Boolean = false) : AutoCloseable {
+class DesktopHarness(access: String = "approval", relay: Boolean = false, extra: List<String> = emptyList()) : AutoCloseable {
     private val proc: Process
     private val events = LinkedBlockingQueue<JsonObject>()
     private val backlog = ArrayList<JsonObject>()
@@ -63,6 +63,7 @@ class DesktopHarness(access: String = "approval", relay: Boolean = false) : Auto
         if (relay) Assume.assumeTrue("중계 서버(backend 저장소 jam-relay.js)를 찾지 못해 건너뜀 — JAM_RELAY_PATH 지정", Env.relayPath != null)
         val cmd = mutableListOf(node, File(Env.nodeScripts, "desktop-host.js").path, desktop.path, "--access", access)
         if (relay) cmd += listOf("--relay", Env.relayPath!!.path)
+        cmd += extra
         proc = ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.INHERIT).start()
         Thread {
             proc.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line ->
@@ -77,6 +78,7 @@ class DesktopHarness(access: String = "approval", relay: Boolean = false) : Auto
     val relayInvite: String? get() = ready.str("relayInvite")
     val code: String get() = ready.str("code")!!
     val secret: String get() = ready.str("secret")!!
+    val port: Int get() = invite.substringAfterLast(':').substringBefore('/').toInt()
 
     /** 다음 이벤트 (ev 가 같고 pred 를 만족하는 것). 앞에 온 다른 이벤트는 보관해 둔다 */
     fun next(ev: String, timeoutMs: Long = 5000, pred: (JsonObject) -> Boolean = { true }): JsonObject {
@@ -124,14 +126,16 @@ class DesktopHarness(access: String = "approval", relay: Boolean = false) : Auto
 }
 
 /** 폰(JamConnection) 쪽 테스트 손님: 받은 메시지를 큐에 쌓는다 */
-class PhoneGuest(invite: String, name: String, resume: String? = null) : JamConnection.Listener {
+class PhoneGuest(invite: Invite, name: String, resume: String? = null) : JamConnection.Listener {
+    constructor(invite: String, name: String, resume: String? = null) : this(Invite.parse(invite)!!, name, resume)
+
     val events = LinkedBlockingQueue<JsonObject>()
     private val backlog = ArrayList<JsonObject>()
     @Volatile var pendingSeen = false
     @Volatile var welcome: JsonObject? = null
     @Volatile var failure: Pair<String, String>? = null
     @Volatile var closed = false
-    val conn: JamConnection = JamConnection(JamConnection.defaultClient(), Invite.parse(invite)!!, name, resume, this).start()
+    val conn: JamConnection = JamConnection(JamConnection.defaultClient(), invite, name, resume, this).start()
 
     override fun onPending() { pendingSeen = true }
     override fun onWelcome(conn: JamConnection, welcome: JsonObject) { this.welcome = welcome; events.add(buildJsonObject { put("type", "__welcome") }) }

@@ -8,7 +8,8 @@
  *  - --relay 를 주면 backend 저장소의 중계 서버 + 데스크톱의 relay-tunnel.js 도 띄우고 jamr:// 초대 코드도 출력
  *  - 호스트가 받은 메시지는 한 줄 JSON 으로 stdout 에 쓴다:  {"ev":"host-msg","msg":{...}}
  *  - stdin 한 줄 JSON 명령:  {"cmd":"send","msg":{...}}  /  {"cmd":"drop-guests"}  /  {"cmd":"quit"}
- *  - 참여 요청은 자동 승인 (이름이 "거절" 로 시작하면 거절)
+ *  - 참여 요청은 자동 승인 (이름이 "거절" 로 시작하면 거절, 근처 페어링 요청도 같음)
+ *  - --beacon <UDP 포트>: 근처 Jam 알림(server/nearby.js)을 0.5초마다 보낸다
  *  - 중계 서버가 본 바이트는 모두 모아 두었다가 {"cmd":"relay-seen","find":[...]} 로 평문이 보였는지 답한다
  */
 const path = require('path');
@@ -73,6 +74,17 @@ async function main() {
     if (msg.type === 'welcome' && !welcomed) {
       welcomed = true;
       const code = msg.room.code;
+      // --beacon <UDP 포트>: 데스크톱과 같은 "근처 Jam" 알림을 보낸다 (server/nearby.js 그대로)
+      if (opt('--beacon')) {
+        const { startBeacon } = require(path.join(desktopDir, 'server', 'nearby.js'));
+        startBeacon({
+          id: 'testhost' + crypto.randomBytes(4).toString('hex'),
+          port: jam.port,
+          udpPort: Number(opt('--beacon')),
+          intervalMs: 500,
+          getRooms: () => [{ code, name: 'PC호스트', access, n: [...jam.rooms.values()][0]?.members.size || 1 }],
+        });
+      }
       out({
         ev: 'ready',
         code,
@@ -84,7 +96,9 @@ async function main() {
       return;
     }
     if (msg.type === 'join-request') {
-      send({ type: 'approve', id: msg.id, ok: !String(msg.name).startsWith('거절') });
+      // --pair-delay <ms>: 근처 페어링 요청은 잠시 뒤에 수락 (에뮬레이터에서 6자리 화면을 보려고)
+      const delay = msg.pair ? Number(opt('--pair-delay') || 0) : 0;
+      setTimeout(() => send({ type: 'approve', id: msg.id, ok: !String(msg.name).startsWith('거절') }), delay);
     }
     out({ ev: 'host-msg', msg });
   });

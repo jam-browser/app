@@ -301,6 +301,31 @@
                             android:textColor="@color/muted"
                             android:textSize="13sp" />
 
+                        <!-- 근처 Jam: 같은 와이파이의 PC 가 보내는 알림 (초대 링크 없이 6자리 확인 코드로 참여) -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="20dp"
+                            android:text="근처 Jam (같은 와이파이)"
+                            android:textColor="@color/text"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/nearby_empty"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="찾는 중… 같은 와이파이의 PC에서 Jam을 시작하면 여기에 나타나요"
+                            android:textColor="@color/muted"
+                            android:textSize="12sp" />
+
+                        <LinearLayout
+                            android:id="@+id/nearby_list"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"

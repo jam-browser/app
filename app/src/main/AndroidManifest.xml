@@ -4,6 +4,9 @@
     <!-- 웹페이지 + Jam 서버 연결. 마이크 · 카메라 · 위치 · 연락처 권한은 요청하지 않는다 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 근처 Jam 찾기: 같은 와이파이의 PC 가 보내는 UDP 3032 알림(브로드캐스트)을 받으려면 멀티캐스트 잠금이 필요 -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- 앱 자기 자신의 업데이트 설치에만 쓴다 (같은 패키지 · 같은 서명 · SHA-256 확인 뒤, 안드로이드가 사용자에게 확인).
          웹에서 받은 설치 파일은 이 권한과 관계없이 "확인 전 보관함"에 갇힌다 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
