@@ -5,6 +5,7 @@
  *  - 다른 사이트 이동 권한이 없으면 다른 사이트로 가는 링크를 잠근다 (진짜 잠금은 앱이 한다)
  *  - 동영상 재생 위치를 맞춘다 (유튜브 광고 중에는 맞추지 않고, 광고가 끝나면 따라간다)
  *  - 사이트가 클립보드에 글자를 넣으면 앱에 알린다 (명령어 붙여넣기 사기 대비)
+ *  - 핑(📍 여기 · ❓ 뭐지? · 👀 이거 봐 · ⚠️ 조심 · 🏃 갈게요)을 그린다. 핑 휠은 앱이 그린다
  *
  * 데스크톱과 같은 좌표 규칙(앵커)을 써서 PC ↔ 폰처럼 화면 크기가 달라도 같은 내용을 가리킨다.
  * 앱과는 jamBridge(WebMessageListener)로만 주고받는다: {ch, d} JSON 문자열.
@@ -413,6 +414,8 @@
   on('jam:clear', function () {
     Array.from(cursors.keys()).forEach(removeCursor);
     Array.from(views_.keys()).forEach(removeView);
+    pings.forEach(function (p) { p.el.remove(); p.edge.remove(); });
+    pings.clear();
     locked = false;
   });
 
@@ -520,6 +523,140 @@
     if (s.rate && video.playbackRate !== s.rate) video.playbackRate = s.rate;
     if (s.playing && video.paused) { var p = video.play(); if (p && p.catch) p.catch(function () {}); }
     if (!s.playing && !video.paused) video.pause();
+  });
+
+
+  // ======================================================================
+  // 핑 (데스크톱 webview-preload.js 의 핑 그림과 같음)
+  //  - 받은 핑: 반짝이는 표시 + 이름, 화면 밖이면 가장자리에 화살표(누르면 그 자리로 스크롤)
+  //  - 핑 휠은 앱(길게 누르기)이 그리고, 놓은 자리(보이는 화면 비율)를 jam:ping-at 으로 알려 준다
+  //    → 여기서 그 자리의 앵커 · 문서 비율을 구해 jam:ping 으로 돌려준다
+  // ======================================================================
+  var PING_ICON = { here: '📍', what: '❓', look: '👀', warn: '⚠️', omw: '🏃' };
+  var PING_LABEL = { here: '여기', what: '뭐지?', look: '이거 봐', warn: '조심', omw: '갈게요' };
+  var pingBox = null;
+  var pingEdge = null;
+  var pings = new Map(); // id → { el, edge, pos, kind, name }
+
+  // 노란 물음표 (직접 그린 그림 — 기기마다 ❓ 이모지 색이 달라서)
+  function whatIcon(size) {
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    var set = function (el, attrs) { for (var k in attrs) el.setAttribute(k, String(attrs[k])); return el; };
+    set(svg, { viewBox: '0 0 32 32', width: size, height: size });
+    var mk = function (tag, attrs) { svg.appendChild(set(document.createElementNS(SVG_NS, tag), attrs)); };
+    mk('circle', { cx: 16, cy: 16, r: 14, fill: '#ffd43b', stroke: '#1d1d1d', 'stroke-width': 2.4 });
+    mk('ellipse', { cx: 11.5, cy: 9.5, rx: 6, ry: 3.2, fill: '#fff', opacity: 0.38 });
+    mk('path', { d: 'M11.6 12.4c0-2.7 2-4.5 4.5-4.5 2.6 0 4.5 1.7 4.5 3.9 0 3.5-4.3 3.6-4.3 6.9', fill: 'none', stroke: '#1d1d1d', 'stroke-width': 3.3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+    mk('circle', { cx: 16.3, cy: 23.7, r: 2.1, fill: '#1d1d1d' });
+    return svg;
+  }
+  function pingIcon(k, size) {
+    if (k === 'what') return whatIcon(size);
+    var s = css(document.createElement('span'), { font: Math.round(size * 0.86) + 'px/1 "Noto Color Emoji",sans-serif', display: 'inline-block', 'line-height': size + 'px' });
+    s.textContent = PING_ICON[k] || '📍';
+    return s;
+  }
+  function pingLayer() {
+    var l = getLayer();
+    if (!pingBox || !l.root.contains(pingBox)) {
+      pingBox = document.createElement('div');
+      pingEdge = css(document.createElement('div'), { position: 'fixed', inset: '0', 'pointer-events': 'none', 'z-index': '3' });
+      l.root.append(pingBox, pingEdge);
+    }
+    return l;
+  }
+
+  function placePing(id, pos, d) {
+    pingLayer();
+    var old = pings.get(id);
+    if (old) { old.el.remove(); old.edge.remove(); }
+    var color = /^#[0-9a-f]{6}$/i.test(d.color) ? d.color : '#2ee6a6';
+    var el = css(document.createElement('div'), { position: 'absolute', left: pos.x + 'px', top: pos.y + 'px', width: '0', height: '0' });
+    var ring = function (delay) {
+      var r = css(document.createElement('div'), {
+        position: 'absolute', left: '-22px', top: '-22px', width: '44px', height: '44px', 'border-radius': '50%',
+        border: '3px solid ' + color, 'box-sizing': 'border-box', opacity: '0',
+      });
+      try { r.animate([{ transform: 'scale(.4)', opacity: 1 }, { transform: 'scale(1.9)', opacity: 0 }], { duration: 1100, delay: delay, iterations: Infinity, easing: 'ease-out' }); } catch (e) {}
+      return r;
+    };
+    var kind = PING_ICON[d.k] ? d.k : 'here';
+    var pin = css(document.createElement('div'), {
+      position: 'absolute', left: '-15px', top: '-34px', width: '30px', height: '30px', display: 'flex', 'align-items': 'center', 'justify-content': 'center',
+      filter: 'drop-shadow(0 2px 2px rgba(0,0,0,.45))',
+    });
+    pin.appendChild(pingIcon(kind, 30));
+    try { pin.animate([{ transform: 'translateY(-14px)' }, { transform: 'translateY(0)' }], { duration: 320, easing: 'cubic-bezier(.3,1.6,.6,1)' }); } catch (e) {}
+    var label = css(document.createElement('div'), {
+      position: 'absolute', left: '14px', top: '-30px', padding: '2px 8px', 'border-radius': '999px', 'white-space': 'nowrap',
+      background: color, color: '#0b0b0b', font: '600 12px/18px ' + FONT, 'box-shadow': '0 1px 4px rgba(0,0,0,.35)',
+    });
+    label.textContent = String(d.name || '').slice(0, 24) + ' · ' + PING_LABEL[kind];
+    el.append(ring(0), ring(450), pin, label);
+    pingBox.appendChild(el);
+    // 폰은 화면이 좁다: 오른쪽 끝이면 이름표를 왼쪽에
+    var lw = label.offsetWidth;
+    var vis = visible();
+    if (pos.x + 14 + lw > Math.min(docSize().w, vis.left + vis.w)) css(label, { left: (-14 - lw) + 'px' });
+    // 화면 밖이면 가장자리 화살표 (누르면 그 자리로)
+    var edge = css(document.createElement('div'), {
+      position: 'absolute', left: '50%', transform: 'translateX(-50%)', padding: '4px 12px', 'border-radius': '999px', display: 'none',
+      background: color, color: '#0b0b0b', font: '600 13px/20px ' + FONT, cursor: 'pointer',
+      'pointer-events': 'auto', 'box-shadow': '0 2px 8px rgba(0,0,0,.4)', 'white-space': 'nowrap',
+    });
+    edge.addEventListener('click', function (e) {
+      if (!e.isTrusted) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var v = visible();
+      window.scrollTo({ top: Math.max(0, pos.y - v.h / 2), left: Math.max(0, pos.x - v.w / 2), behavior: 'smooth' });
+    });
+    pingEdge.appendChild(edge);
+    var sec = Math.min(30, Math.max(2, Number(d.sec) || 6));
+    var rec = { el: el, edge: edge, pos: pos, kind: kind, name: label.textContent };
+    pings.set(id, rec);
+    updatePingEdges();
+    setTimeout(function () {
+      if (pings.get(id) !== rec) return;
+      pings.delete(id);
+      try { el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }); } catch (e) {}
+      setTimeout(function () { el.remove(); edge.remove(); }, 320);
+    }, sec * 1000);
+    var v = visible();
+    send('jam:ping-shown', { id: id, onscreen: pos.y >= v.top && pos.y <= v.top + v.h, k: kind });
+  }
+  function updatePingEdges() {
+    var v = visible();
+    pings.forEach(function (p) {
+      var vy = p.pos.y - v.top;
+      var fill = function (arrow) {
+        if (p.edge.dataset.dir === arrow) return;
+        p.edge.dataset.dir = arrow;
+        var ic = pingIcon(p.kind, 18);
+        css(ic, { 'vertical-align': '-4px', margin: '0 4px' });
+        p.edge.replaceChildren(arrow, ic, p.name);
+      };
+      if (vy < 0) { css(p.edge, { display: 'block', top: '8px', bottom: 'auto' }); fill('▲'); }
+      else if (vy > v.h) { css(p.edge, { display: 'block', top: 'auto', bottom: '8px' }); fill('▼'); }
+      else p.edge.style.setProperty('display', 'none', 'important');
+    });
+  }
+  window.addEventListener('scroll', throttle(updatePingEdges, 80), { passive: true });
+
+  // 받은 핑 (같은 페이지): 앵커로 자리를 찾고, 못 찾으면 문서 비율로
+  on('jam:ping', function (d) {
+    if (!d) return;
+    var s = docSize();
+    var pos = resolveAnchor(d.a) || { x: Number(d.x) * s.w, y: Number(d.y) * s.h };
+    placePing(String(d.id || Math.random()), pos, d);
+  });
+  // 앱의 핑 휠을 놓은 자리 (보이는 화면 비율) → 문서 위치 + 앵커
+  on('jam:ping-at', function (d) {
+    var v = visible();
+    var cx = v.ox + Number(d.vx) * v.w; // 레이아웃 뷰포트 기준 (elementFromPoint 와 같은 좌표)
+    var cy = v.oy + Number(d.vy) * v.h;
+    var s = docSize();
+    send('jam:ping', { x: (window.scrollX + cx) / s.w, y: (window.scrollY + cy) / s.h, a: anchorAt(cx, cy) });
   });
 
   send('jam:ready');

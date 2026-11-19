@@ -12,6 +12,8 @@ data class Invite(
     val code: String,
     val secret: String,
     val relay: Boolean,
+    /** 근처 페어링으로 받은 일회용 입장권 (호스트가 이미 수락함 → 다시 승인받지 않음) */
+    val ticket: String? = null,
 ) {
     companion object {
         const val DEFAULT_PORT = 3030

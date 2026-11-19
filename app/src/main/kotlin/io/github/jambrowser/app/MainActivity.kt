@@ -7,6 +7,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -46,6 +47,10 @@ import io.github.jambrowser.core.Invite
 import io.github.jambrowser.core.JamConnection
 import io.github.jambrowser.core.JamController
 import io.github.jambrowser.core.JamController.Change
+import io.github.jambrowser.core.JamFiles
+import io.github.jambrowser.core.Nearby
+import io.github.jambrowser.core.NearbyPairing
+import io.github.jambrowser.core.Pairing
 import io.github.jambrowser.core.Site
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -62,6 +67,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     private lateinit var jam: JamController
     private lateinit var downloads: DownloadGuard
     private lateinit var clipboard: ClipboardGuard
+    private lateinit var updater: AppUpdater
 
     private val tabs = ArrayList<Tab>()
     private var active: Tab? = null
@@ -78,6 +84,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     private lateinit var progress: ProgressBar
     private lateinit var webHolder: FrameLayout
     private lateinit var reactionLayer: FrameLayout
+    private lateinit var pingWheel: PingWheel
+    private lateinit var mirrorView: MirrorView
     private lateinit var panel: View
     private lateinit var banner: View
     private lateinit var bannerText: TextView
@@ -100,6 +108,13 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var requestDialog: AlertDialog? = null
+    // 근처 Jam
+    private lateinit var nearbyList: LinearLayout
+    private lateinit var nearbyEmpty: TextView
+    private var scanner: Nearby.Scanner? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
+    private var pairing: NearbyPairing? = null
+    private var pairDialog: AlertDialog? = null
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val cb = fileCallback ?: return@registerForActivityResult
@@ -127,15 +142,26 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         downloads = DownloadGuard(this)
         clipboard = ClipboardGuard(this)
         jam = JamController(this, { inv, name, resume, l -> JamConnection(http, inv, name, resume, l).start() })
+        jam.pingEnabled = prefs.getBoolean("pingEnabled", true)
+        // 화면 미러링: 웹 화면 · 핑 휠 위, Jam 패널 아래
+        mirrorView = MirrorView(this, jam) { showMirror(false) }
+        findViewById<FrameLayout>(R.id.content).addView(
+            mirrorView, 3, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
         bindViews()
         newTab(homeUrl)
         handleIntent(intent)
+        FileViewer.clearCache(this)
+        updater = AppUpdater(this, http)
+        updater.start()
+        updater.handleDebugIntent(intent)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
                     fullscreenView != null -> showFullscreen(null, null)
                     panel.isVisible -> showPanel(false)
+                    mirrorView.isVisible -> showMirror(false)
                     active?.webView?.canGoBack() == true -> active?.webView?.goBack()
                     tabs.size > 1 && active != jamTab -> closeTab(active!!)
                     else -> { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
@@ -147,6 +173,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+        updater.handleDebugIntent(intent)
     }
 
     /** 초대 링크 · 공유받은 글: 참여 화면에 채우기만 하고, 참여는 사용자가 직접 누른다 */
@@ -176,6 +203,11 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         progress = findViewById(R.id.progress)
         webHolder = findViewById(R.id.web_holder)
         reactionLayer = findViewById(R.id.reaction_layer)
+        // 핑 휠: 웹 화면 · 반응 위, Jam 패널 아래
+        pingWheel = PingWheel(this)
+        findViewById<FrameLayout>(R.id.content).addView(
+            pingWheel, 2, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
         panel = findViewById(R.id.panel)
         banner = findViewById(R.id.banner)
         bannerText = findViewById(R.id.banner_text)
@@ -192,6 +224,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         chatInput = findViewById(R.id.chat_input)
         queueBox = findViewById(R.id.queue)
         nowPlaying = findViewById(R.id.now_playing)
+        nearbyList = findViewById(R.id.nearby_list)
+        nearbyEmpty = findViewById(R.id.nearby_empty)
 
         nameBox.setText(prefs.getString("name", ""))
 
@@ -211,6 +245,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         findViewById<View>(R.id.seg_people).setOnClickListener { showPage(if (jam.active) "people" else "join") }
         findViewById<View>(R.id.seg_chat).setOnClickListener { if (jam.active) showPage("chat") else toast("먼저 Jam에 참여하세요") }
         findViewById<View>(R.id.seg_queue).setOnClickListener { if (jam.active) showPage("queue") else toast("먼저 Jam에 참여하세요") }
+        findViewById<View>(R.id.seg_files).setOnClickListener { if (jam.active) showPage("files") else toast("먼저 Jam에 참여하세요") }
         findViewById<View>(R.id.paste_invite).setOnClickListener {
             val t = getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
             val inv = Invite.find(t)
@@ -235,6 +270,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                 setOnClickListener { jam.sendReaction(e) }
             })
         }
+        showPage(page)
         renderAll()
     }
 
@@ -246,6 +282,10 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         wv.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         val tab = Tab(++tabSeq, this, wv)
         tabs += tab
+        // Jam 탭에서 길게 누르기 → 핑 휠 (개인 탭 · 로그인 페이지에서는 평소처럼 글자 선택)
+        wv.setOnTouchListener(PingGesture(wv, pingWheel, { tab == jamTab && jam.active && jam.pingEnabled && Site.isShareable(tab.url) }) { fx, fy, k ->
+            jam.requestPing(fx, fy, k)
+        })
         if (url != null) tab.load(url)
         if (activate) activate(tab)
         renderTabs()
@@ -434,6 +474,10 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         }
         val inv = Invite.find(inviteBox.text.toString())
             ?: return toast("초대 코드 형식이 올바르지 않아요. 호스트가 보낸 코드 전체(jam://주소/코드/비밀키)를 붙여 넣으세요")
+        joinWith(inv, name)
+    }
+
+    private fun joinWith(inv: Invite, name: String) {
         prefs.edit().putString("name", name).apply()
         hideKeyboard()
         // Jam 탭: 지금 탭을 쓴다 (Jam 페이지로 이동하게 됨)
@@ -444,6 +488,98 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         chatBox.removeAllViews()
         unread = 0
         jam.join(inv, name)
+    }
+
+    // ======================================================================
+    // 근처 Jam (같은 와이파이, 초대 링크 없이)
+    // ======================================================================
+    /** 참여 화면이 보이는 동안만 듣는다 (배터리) */
+    private fun updateNearbyScan() {
+        val want = panel.isVisible && page == "join" && jam.status == JamController.Status.IDLE && appInFront
+        if (want && scanner == null) {
+            val lock = try {
+                applicationContext.getSystemService(WifiManager::class.java)?.createMulticastLock("jam-nearby")?.apply { setReferenceCounted(false); acquire() }
+            } catch (_: Exception) { null }
+            val s = Nearby.Scanner({ list -> main.post { if (scanner != null) renderNearby(list) } })
+            if (!s.start()) {
+                lock?.release()
+                nearbyEmpty.text = "근처 찾기를 시작할 수 없어요 (UDP ${Nearby.PORT} 포트를 다른 앱이 쓰는 중이에요)"
+                return
+            }
+            multicastLock = lock
+            scanner = s
+            renderNearby(emptyList())
+        } else if (!want && scanner != null) {
+            scanner?.stop()
+            scanner = null
+            try { multicastLock?.release() } catch (_: Exception) {}
+            multicastLock = null
+        }
+    }
+
+    private fun renderNearby(list: List<Nearby.Beacon>) {
+        nearbyList.removeAllViews()
+        nearbyEmpty.text = if (list.isEmpty()) "찾는 중… 같은 와이파이의 PC에서 Jam을 시작하면 여기에 나타나요" else "PC에 뜨는 6자리 확인 코드가 내 화면과 같은지 확인하고 수락받아요"
+        for (b in list) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(6)) }
+            row.addView(TextView(this).apply {
+                text = "🖥 ${b.name}\n${b.n}명 · ${b.accessLabel} · ${b.ip}"
+                setTextColor(getColor(R.color.text)); textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(Button(this).apply {
+                text = "참여 요청"
+                isSoundEffectsEnabled = false
+                setOnClickListener { startPairing(b) }
+            })
+            nearbyList.addView(row)
+        }
+    }
+
+    private fun startPairing(b: Nearby.Beacon) {
+        val name = nameBox.text.toString().trim()
+        if (name.isEmpty()) {
+            nameBox.requestFocus()
+            return toast("먼저 이름을 입력해 주세요")
+        }
+        if (b.access == "friends") return toast("이 Jam은 호스트의 친구만 들어갈 수 있어요 (폰은 아직 계정 신원 확인을 지원하지 않아요)")
+        if (jam.status != JamController.Status.IDLE) return
+        hideKeyboard()
+        pairing?.cancel()
+        val sasView = TextView(this).apply {
+            text = "연결 중…"
+            textSize = 15f
+            setTextColor(getColor(R.color.text))
+            setPadding(dp(24), dp(12), dp(24), 0)
+        }
+        pairDialog?.dismiss()
+        pairDialog = AlertDialog.Builder(this)
+            .setTitle("${b.name}에 참여 요청")
+            .setView(sasView)
+            .setCancelable(false)
+            .setNegativeButton("취소") { _, _ -> pairing?.cancel() }
+            .show()
+        pairing = NearbyPairing(http, b, name, object : NearbyPairing.Listener {
+            override fun onSas(sas: String) = runOnMain {
+                sasView.text = SpannableStringBuilder().apply {
+                    append("확인 코드\n")
+                    val start = length
+                    append(Pairing.formatSas(sas))
+                    setSpan(android.text.style.RelativeSizeSpan(2.2f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(StyleSpan(android.graphics.Typeface.BOLD), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    append("\n\nPC 화면의 참여 요청에 같은 숫자가 보이는지 확인하세요. 숫자가 다르면 취소하세요 — 다른 기기가 끼어든 거예요.")
+                }
+            }
+            override fun onPending() = runOnMain { pairDialog?.setTitle("호스트의 수락을 기다리는 중…") }
+            override fun onDone(invite: Invite) = runOnMain {
+                pairDialog?.dismiss(); pairDialog = null; pairing = null
+                if (jam.status == JamController.Status.IDLE) joinWith(invite, name)
+            }
+            override fun onFailed(code: String, message: String) = runOnMain {
+                pairDialog?.dismiss(); pairDialog = null; pairing = null
+                if (code != "cancelled") { joinStatus.text = message; toast(message) }
+            }
+        }).start()
     }
 
     private fun sendChat() {
@@ -478,6 +614,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     override fun jamTabInFront(): Boolean = appInFront && active == jamTab && jamTab != null
 
     override fun loadInJamTab(url: String) {
+        // 같이 보는 파일(jamfile://)은 웹뷰가 아니라 받은 파일로 연다
+        if (JamFiles.fidOf(url) != null) return onJamFile(url)
         val t = jamTab ?: return
         lastRemoteNavAt = System.currentTimeMillis()
         t.load(url)
@@ -538,8 +676,100 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         tv.animate().translationY(-reactionLayer.height * 0.6f).alpha(0f).setDuration(1800).withEndAction { reactionLayer.removeView(tv) }.start()
     }
 
+    override fun mirror(info: io.github.jambrowser.core.MirrorAssembler.Info?) {
+        if (info == null) {
+            mirrorView.close()
+        } else {
+            mirrorView.open(info)
+            showMirror(true)
+        }
+        renderBanner()
+    }
+
+    override fun mirrorFrame(frame: io.github.jambrowser.core.MirrorAssembler.Frame) = mirrorView.frame(frame)
+    override fun mirrorPaused(paused: String?, secret: Boolean) = mirrorView.setPaused(paused)
+
+    // ---------- 같이 보는 파일 ----------
+    override fun filesChanged() {
+        renderFiles()
+        renderBanner()
+    }
+
+    override fun fileReady(file: JamFiles.SharedFile, open: Boolean) {
+        renderFiles()
+        if (open) openFile(file)
+    }
+
+    /** Jam 이 공유 파일로 이동: 받았으면 열고, 아니면 받을지 묻는다 (처음 한 번) */
+    private fun onJamFile(url: String) {
+        val (f, ask) = jam.files.gate(url)
+        if (f != null && jam.files.local(f.fid) != null) return openFile(f)
+        if (!ask) return renderBanner()
+        val by = jam.member(f?.by)?.name ?: "호스트"
+        val what = if (f != null) "${f.icon} ${f.name} (${android.text.format.Formatter.formatShortFileSize(this, f.size)})" else "공유 파일"
+        AlertDialog.Builder(this)
+            .setTitle("📎 ${by}님이 파일을 열었어요")
+            .setMessage("$what\n\n받은 파일은 앱 안 메모리에만 있고, Jam 을 나가면 지워져요.")
+            .setPositiveButton("받아서 열기") { _, _ -> f?.let { jam.files.download(it.fid, open = true) } }
+            .setNegativeButton("나중에", null)
+            .show()
+        renderBanner()
+    }
+
+    private fun openFile(f: JamFiles.SharedFile) {
+        val local = jam.files.local(f.fid) ?: return
+        if (!f.viewable) return toast("${f.icon} 이 형식(${f.kind})은 폰에서 아직 열 수 없어요")
+        FileViewer(this, f, local).show()
+    }
+
+    private fun renderFiles() {
+        val box = findViewById<LinearLayout>(R.id.files_list)
+        box.removeAllViews()
+        if (!jam.active) return
+        val list = jam.files.list
+        if (list.isEmpty()) {
+            box.addView(TextView(this).apply { text = "아직 공유된 파일이 없어요."; setTextColor(getColor(R.color.muted)); textSize = 13f })
+        }
+        for (f in list) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(6)) }
+            val progress = jam.files.progress(f.fid)
+            val got = jam.files.local(f.fid) != null
+            val status = when {
+                !f.ready -> "올리는 중…"
+                progress != null -> "받는 중 ${(progress * 100).toInt()}%"
+                got -> "받음"
+                else -> "${jam.member(f.by)?.name ?: "호스트"}님 공유"
+            }
+            row.addView(TextView(this).apply {
+                text = "${f.icon} ${f.name}\n${android.text.format.Formatter.formatShortFileSize(this@MainActivity, f.size)} · $status"
+                setTextColor(getColor(R.color.text)); textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            if (f.ready && progress == null) {
+                row.addView(Button(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+                    text = if (got) "열기" else "받아서 열기"
+                    isSoundEffectsEnabled = false
+                    setOnClickListener { if (got) openFile(f) else jam.files.download(f.fid, open = true) }
+                })
+            }
+            box.addView(row)
+        }
+        findViewById<TextView>(R.id.seg_files).text = if (list.isEmpty()) "파일" else "파일 ${list.size}"
+    }
+
+    /** 미러링 화면 보이기 / 숨기기 (숨기면 영상을 받지 않는 것으로 친다) */
+    private fun showMirror(show: Boolean) {
+        if (jam.mirrorInfo == null) return
+        mirrorView.isVisible = show
+        jam.mirrorHidden = !show
+        if (show) showPanel(false)
+        renderBanner()
+    }
+
     override fun ended(reason: String?) {
         requestDialog?.dismiss()
+        FileViewer.clearCache(this) // 받은 파일은 Jam 을 나가면 지운다
+        renderFiles()
         jamTab?.isJam = false
         jamTab = null
         renderAll()
@@ -571,9 +801,11 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         renderJamButton()
         renderPeople()
         renderQueue()
+        renderFiles()
         renderNow()
         renderBanner()
         renderRequests()
+        updateNearbyScan()
     }
 
     private fun renderJamButton() {
@@ -594,11 +826,31 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                 bannerAction.isVisible = false
                 banner.isVisible = true
             }
+            jam.active && jam.mirrorInfo != null && !mirrorView.isVisible -> {
+                bannerText.text = "🖥 ${jam.member(jam.mirrorInfo?.by)?.name ?: "호스트"}님이 화면 미러링 중이에요"
+                bannerAction.text = "보기"
+                bannerAction.isVisible = true
+                bannerAction.setOnClickListener { showMirror(true) }
+                banner.isVisible = true
+                return
+            }
             jam.active && jam.loginWait && inJamTab -> {
                 bannerText.text = "🔐 로그인 중이에요. 내 로그인 창은 나만 보여요 — 로그인을 마치면 \"${cur?.title?.ifEmpty { null } ?: Site.pretty(cur?.url)}\" 로 자동으로 이동해요"
                 bannerAction.text = "지금 Jam으로"
                 bannerAction.isVisible = true
                 banner.isVisible = true
+            }
+            jam.active && inJamTab && JamFiles.fidOf(cur?.url) != null -> {
+                val f = jam.files.get(JamFiles.fidOf(cur?.url))
+                bannerText.text = "📎 Jam은 지금 공유 파일 \"${f?.name ?: cur?.title ?: "파일"}\" 을(를) 보고 있어요"
+                bannerAction.text = if (f != null && jam.files.local(f.fid) != null) "파일 열기" else "받아서 열기"
+                bannerAction.isVisible = true
+                bannerAction.setOnClickListener {
+                    if (f == null) return@setOnClickListener
+                    if (jam.files.local(f.fid) != null) openFile(f) else jam.files.download(f.fid, open = true)
+                }
+                banner.isVisible = true
+                return
             }
             jam.active && inJamTab && jam.isDrifted() -> {
                 bannerText.text = "Jam은 지금 \"${cur?.title?.ifEmpty { null } ?: Site.pretty(cur?.url)}\" 을(를) 보고 있어요" + if (!jam.follow) " (따라가기 꺼짐)" else ""
@@ -743,6 +995,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
 
     private fun showPanel(show: Boolean) {
         panel.isVisible = show
+        updateNearbyScan()
         if (show && page == "chat") { unread = 0; renderJamButton() }
         if (!show) hideKeyboard()
     }
@@ -753,10 +1006,12 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         findViewById<View>(R.id.page_people).isVisible = p == "people"
         findViewById<View>(R.id.page_chat).isVisible = p == "chat"
         findViewById<View>(R.id.page_queue).isVisible = p == "queue"
-        val sel = mapOf("people" to R.id.seg_people, "join" to R.id.seg_people, "chat" to R.id.seg_chat, "queue" to R.id.seg_queue)
+        findViewById<View>(R.id.page_files).isVisible = p == "files"
+        val sel = mapOf("people" to R.id.seg_people, "join" to R.id.seg_people, "chat" to R.id.seg_chat, "queue" to R.id.seg_queue, "files" to R.id.seg_files)
         for ((k, id) in sel) findViewById<TextView>(id).alpha = if (k == p || (p == "join" && k == "people")) 1f else 0.45f
         findViewById<TextView>(R.id.seg_people).text = if (jam.active) "사람" else "참여"
         if (p == "chat") { unread = 0; renderJamButton() }
+        updateNearbyScan()
     }
 
     private fun showMenu(anchor: View) {
@@ -765,6 +1020,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         pm.menu.add(0, 2, 0, "확인 전 보관함 (다운로드)")
         if (jam.active) pm.menu.add(0, 3, 0, "지금 페이지를 Jam 대기열에")
         pm.menu.add(0, 4, 0, "이 탭을 Jam 탭으로 쓰기").isEnabled = jam.active && active != jamTab
+        pm.menu.add(0, 6, 0, "설정")
+        pm.menu.add(0, 7, 0, "업데이트 확인")
         pm.menu.add(0, 5, 0, "정보 · 보안 안내")
         pm.setOnMenuItemClickListener {
             when (it.itemId) {
@@ -779,10 +1036,27 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                     renderAll()
                 }
                 5 -> showAbout()
+                6 -> showSettings()
+                7 -> updater.checkNow(manual = true)
             }
             true
         }
         pm.show()
+    }
+
+    private fun showSettings() {
+        val items = arrayOf("자동 업데이트 확인", "핑 찍기 · 보기 (Jam 탭을 길게 누르기)")
+        val checked = booleanArrayOf(updater.enabled, jam.pingEnabled)
+        AlertDialog.Builder(this)
+            .setTitle("설정")
+            .setMultiChoiceItems(items, checked) { _, i, v ->
+                when (i) {
+                    0 -> updater.enabled = v
+                    1 -> { jam.pingEnabled = v; prefs.edit().putBoolean("pingEnabled", v).apply() }
+                }
+            }
+            .setPositiveButton("닫기", null)
+            .show()
     }
 
     private fun showAbout() {
@@ -794,6 +1068,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                     "• 초대 코드의 비밀키는 서버로 보내지 않고, Jam 메시지는 모두 그 키로 암호화돼요 (AES-256-GCM). 서버 · 중계 서버는 전달만 해요.\n" +
                     "• 로그인 · 결제 페이지 주소는 다른 사람에게 공유되지 않아요. 로그인은 각자 자기 폰에서 해요.\n" +
                     "• 설치 파일(APK 등)은 '확인 전 보관함'에 갇혀 있다가, 직접 확인하고 내보내야만 나가요.\n" +
+                    "• 앱 설치 권한은 이 앱 자신의 업데이트에만 써요 (GitHub 릴리스 · SHA-256 · 같은 서명 확인, 설치는 안드로이드가 다시 물어봐요).\n" +
                     "• 사이트가 클립보드에 글자를 넣으면 알려 드려요. 명령어라면 절대 실행하지 마세요.\n\n" +
                     "소스: github.com/jam-browser/app"
             )
@@ -839,6 +1114,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         super.onResume()
         appInFront = true
         clipboard.refreshBaseline()
+        updater.onResume()
+        updateNearbyScan()
         active?.webView?.onResume()
         if (jam.active) jam.onJamTabFrontChanged()
     }
@@ -847,12 +1124,17 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         super.onPause()
         appInFront = false
         if (jam.active) jam.onJamTabFrontChanged()
+        updateNearbyScan()
         // Jam 탭이 아니면 멈춘다 (배터리). Jam 탭은 연결이 살아 있는 동안 계속 동기화
         active?.takeIf { it != jamTab }?.webView?.onPause()
     }
 
     override fun onDestroy() {
         if (isFinishing) jam.leave()
+        pairing?.cancel()
+        scanner?.stop()
+        try { multicastLock?.release() } catch (_: Exception) {}
+        updater.stop()
         tabs.forEach { it.destroy() }
         tabs.clear()
         super.onDestroy()

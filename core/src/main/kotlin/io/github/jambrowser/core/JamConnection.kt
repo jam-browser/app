@@ -127,6 +127,7 @@ class JamConnection(
                     val inner = buildJsonObject {
                         put("name", name)
                         if (resume != null) put("resume", resume) else put("resume", JsonNull)
+                        invite.ticket?.let { put("ticket", it) }
                         identity?.invoke(nonce, invite.code)?.let { put("id", it) }
                     }
                     val sealed = JamCrypto.seal(k, inner.toString(), JamCrypto.C2S)

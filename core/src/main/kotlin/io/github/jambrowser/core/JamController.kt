@@ -42,6 +42,16 @@ class JamController(
         fun reaction(emoji: String, color: String) {}
         /** Jam 이 끝났거나 연결이 완전히 끊김 (이유 문장) */
         fun ended(reason: String?) {}
+        /** 화면 미러링 시작(info) · 끝(null) */
+        fun mirror(info: MirrorAssembler.Info?) {}
+        /** 디코더에 넣을 영상 프레임 (메인 스레드) */
+        fun mirrorFrame(frame: MirrorAssembler.Frame) {}
+        /** 호스트가 영상을 잠시 멈춤 (typing · secret · page) / 다시 보냄(null) */
+        fun mirrorPaused(paused: String?, secret: Boolean) {}
+        /** 같이 보는 파일 목록 · 받는 상태가 바뀜 */
+        fun filesChanged() {}
+        /** 파일을 다 받고 해시까지 확인함 (open = 받은 뒤 바로 열기) */
+        fun fileReady(file: JamFiles.SharedFile, open: Boolean) {}
     }
 
     fun interface Cancellable { fun cancel() }
@@ -108,6 +118,11 @@ class JamController(
     var followScroll = false
         set(v) { field = v; host.changed(Change.STATE) }
     var followingId: String? = null; private set
+
+    /** 핑 찍기 · 보기 (데스크톱 설정 pingEnabled · pingSeconds · pingToastOther 와 같음) */
+    var pingEnabled = true
+    var pingSeconds = 6
+    var pingToastOther = true
 
     var inAd = false; private set
     var loginWait = false; private set
@@ -227,6 +242,9 @@ class JamController(
         youId = null; hostId = null; code = ""
         members = emptyList(); queue = emptyList(); current = null
         media = null; inAd = false; loginWait = false; myView = null; followingId = null
+        pingAsk = null
+        stopMirrorView()
+        files.reset()
         requests.clear()
         resume = null
         host.changed(Change.STATE)
@@ -246,10 +264,12 @@ class JamController(
         members = (room["members"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.let(Member::from) } ?: emptyList()
         queue = parseQueue(room["queue"])
         current = parseCurrent(room.obj("current"))
+        files.onWelcome(room["files"] as? JsonArray)
         room.obj("settings")?.let(::applySettings)
         media = room.obj("media")?.let(::parseMedia)
         if (firstJoin) {
             host.chat(ChatLine(true, "", "", "Jam에 오신 걸 환영해요. JAM 탭에서는 같은 사이트 안이라면 누구나 페이지를 넘길 수 있어요.", false))
+            if (pingEnabled) host.chat(ChatLine(true, "", "", "📍 화면을 길게 누르면 핑 휠이 열려요: 끌어서 위 ⚠️ 조심 · 아래 ❓ 뭐지? · 오른쪽 👀 이거 봐 · 왼쪽 🏃 갈게요, 그대로 놓으면 📍 여기", false))
             val cur = current
             lastSyncedUrl = cur?.url
             if (cur != null) host.loadInJamTab(cur.url)
@@ -264,6 +284,8 @@ class JamController(
         myView?.let { publishViewport(it) }
         refreshAllViews()
         applyMedia()
+        val mir = MirrorAssembler.Info.from(room.obj("mirror"))
+        if (mir != null && mir.by != youId) openMirror(mir)
     }
 
     // ======================================================================
@@ -354,6 +376,17 @@ class JamController(
             "chat" -> host.chat(ChatLine(false, msg.str("name") ?: "", msg.str("color") ?: "#888", msg.str("text") ?: "", msg.str("by") == youId))
             "system" -> host.chat(ChatLine(true, "", "", msg.str("text") ?: "", false))
             "reaction" -> host.reaction(msg.str("emoji") ?: return, msg.str("color") ?: "#888")
+            "ping" -> {
+                // 다른 사람이 찍은 핑: 같은 페이지면 그 자리에, 아니면 알림
+                val m = member(msg.str("by")) ?: return
+                if (!pingEnabled) return
+                val k = pingKind(msg.str("k"))
+                if (Site.sameDoc(msg.str("url"), host.jamTabUrl())) {
+                    host.toPage("jam:ping", pingShow("${m.id}-${clock()}", m.name, m.color, msg["x"], msg["y"], msg["a"], k))
+                } else if (pingToastOther) {
+                    host.toast("${PING_ICON[k]} ${m.name}님이 다른 페이지(${Site.pretty(msg.str("url"))})에 핑을 찍었어요")
+                }
+            }
             "queue" -> {
                 queue = parseQueue(msg["queue"])
                 host.changed(Change.QUEUE)
@@ -363,6 +396,15 @@ class JamController(
                 host.changed(Change.SETTINGS)
                 applyLock()
             }
+            "mirror" -> {
+                val info = MirrorAssembler.Info.from(msg.obj("mirror"))
+                if (info == null) stopMirrorView() else if (info.by != youId) openMirror(info)
+            }
+            "mv" -> onMirrorChunk(msg)
+            "file", "file-removed", "file-down" -> files.handle(msg)
+            "mstate" -> if (msg.str("sid") == mirrorAsm.sid) host.mirrorPaused(msg.str("paused")?.takeIf { it in setOf("typing", "secret", "page") }, msg.bool("secret"))
+            "mblock" -> host.toast("🛑 보호된 곳이라 원격 조작이 막혔어요")
+            "control" -> host.toast("호스트가 화면 조작을 허락했지만, 폰에서는 아직 보기만 할 수 있어요")
             "error" -> host.toast(msg.str("message") ?: "오류가 났어요")
             "join-request" -> {
                 val id = msg.str("id") ?: return
@@ -602,6 +644,13 @@ class JamController(
                 }
             }
             "jam:media-ready" -> applyMedia()
+            "jam:ping" -> {
+                // 앱(핑 휠)이 부탁한 핑에만 답한다. 페이지 스크립트가 마음대로 핑을 보내지 못하게
+                val ask = pingAsk ?: return
+                pingAsk = null
+                if (o == null || clock() - ask.second > 3000 || !Site.isShareable(url)) return
+                sendPing(url!!, o["x"], o["y"], o["a"], ask.first)
+            }
         }
     }
 
@@ -674,6 +723,154 @@ class JamController(
     }
 
     // ======================================================================
+    // 같이 보는 파일
+    // ======================================================================
+    val files = JamFiles({ send(it) }, object : JamFiles.Listener {
+        override fun filesChanged() = host.filesChanged()
+        override fun fileReady(file: JamFiles.SharedFile, open: Boolean) {
+            if (!open) host.toast("📎 받았어요: ${file.name}")
+            host.fileReady(file, open)
+        }
+        override fun fileError(file: JamFiles.SharedFile?, message: String) = host.toast("📎 $message")
+    })
+
+    // ======================================================================
+    // 화면 미러링 보기
+    // ======================================================================
+    private val mirrorAsm = MirrorAssembler { clock().toDouble() }
+    var mirrorInfo: MirrorAssembler.Info? = null; private set
+    /** 미러링 화면을 숨겼으면 피드백(mfb)을 보내지 않는다 (데스크톱 v.hidden 과 같음) */
+    var mirrorHidden = false
+        set(v) { field = v; if (!v) mirrorRestart() }
+    private var mirrorBad = false
+    private var mirrorLastKeyReq = -1_000_000L
+    private var mirrorTimer: Cancellable? = null
+
+    private fun openMirror(info: MirrorAssembler.Info) {
+        if (mirrorAsm.sid == info.sid) return
+        mirrorInfo = info
+        mirrorAsm.open(info.sid)
+        mirrorBad = false
+        mirrorHidden = false
+        host.mirror(info)
+        host.mirrorPaused(info.paused, info.secret)
+        requestMirrorKey(true)
+        mirrorTimer?.cancel()
+        mirrorTimer = host.schedule(1000, ::mirrorFeedback)
+    }
+
+    private fun stopMirrorView() {
+        mirrorTimer?.cancel()
+        mirrorTimer = null
+        if (mirrorInfo == null && mirrorAsm.sid == null) return
+        mirrorInfo = null
+        mirrorAsm.close()
+        host.mirror(null)
+    }
+
+    private fun onMirrorChunk(msg: JsonObject) {
+        when (val r = mirrorAsm.onChunk(msg)) {
+            null -> {}
+            is MirrorAssembler.Result.NeedKey -> requestMirrorKey(false)
+            is MirrorAssembler.Result.Decode -> host.mirrorFrame(r.frame)
+        }
+    }
+
+    /** 키프레임 요청 (1초에 한 번까지) */
+    fun requestMirrorKey(force: Boolean) {
+        if (mirrorAsm.sid == null || !active) return
+        val now = clock()
+        if (!force && now - mirrorLastKeyReq < 1000) return
+        mirrorLastKeyReq = now
+        send(buildJsonObject { put("type", "mkey") })
+    }
+
+    /** 화면 쪽: 새 화면(Surface)이 생겼다 → 다음 키프레임부터 */
+    fun mirrorRestart() {
+        mirrorAsm.resetToKey()
+        requestMirrorKey(true)
+    }
+
+    /** 화면 쪽 디코더: 한 프레임을 그렸다 */
+    fun mirrorDecoded() { mirrorAsm.frames++ }
+
+    /** 화면 쪽 디코더: 이 영상 형식을 못 풀거나 오류 → 호스트가 형식을 바꾸도록 알리고 키프레임부터 다시 */
+    fun mirrorDecodeFailed(unsupported: Boolean) {
+        if (unsupported) mirrorBad = true
+        mirrorAsm.resetToKey()
+        requestMirrorKey(false)
+    }
+
+    /** 화면 쪽 디코더가 밀림 → 건너뛰고 키프레임부터, 호스트에게 화질을 낮춰 달라고 */
+    fun mirrorBehind() {
+        mirrorAsm.late = maxOf(mirrorAsm.late, 1000.0)
+        mirrorAsm.resetToKey()
+        requestMirrorKey(false)
+    }
+
+    /** 1초마다: 받는 지연을 호스트에게 (호스트가 화질 조절) */
+    private fun mirrorFeedback() {
+        mirrorTimer = null
+        if (mirrorAsm.sid == null || !active) return
+        if (mirrorAsm.frames > 0 && !mirrorHidden) {
+            send(buildJsonObject { put("type", "mfb"); put("late", Math.round(mirrorAsm.late)); put("bad", mirrorBad) })
+        }
+        mirrorAsm.late = 0.0
+        mirrorTimer = host.schedule(1000, ::mirrorFeedback)
+    }
+
+    // ======================================================================
+    // 핑 (📍 여기 · ❓ 뭐지? · 👀 이거 봐 · ⚠️ 조심 · 🏃 갈게요)
+    // ======================================================================
+    private var pingAsk: Pair<String, Long>? = null
+    private var pingTokens = PING_BURST.toDouble()
+    private var pingAt = -1L
+
+    /** 서버와 같은 도배 방지 (순간 6개, 초당 2개). 쓸 수 있으면 하나 쓰고 true */
+    fun takePingToken(): Boolean {
+        val now = clock()
+        if (pingAt >= 0) pingTokens = minOf(PING_BURST.toDouble(), pingTokens + (now - pingAt) / 1000.0 * PING_PER_SEC)
+        pingAt = now
+        if (pingTokens < 1) return false
+        pingTokens -= 1
+        return true
+    }
+
+    /** 핑 휠을 놓았다: 화면의 (보이는 영역 비율 vx, vy) 자리를 페이지 스크립트가 앵커로 바꿔서 jam:ping 으로 돌려준다 */
+    fun requestPing(vx: Double, vy: Double, kind: String): Boolean {
+        if (!active || !pingEnabled) return false
+        if (!Site.isShareable(host.jamTabUrl())) {
+            host.toast("이 페이지에는 핑을 찍을 수 없어요 (로그인 · 결제 페이지 등)")
+            return false
+        }
+        pingAsk = pingKind(kind) to clock()
+        host.toPage("jam:ping-at", buildJsonObject { put("vx", vx.coerceIn(0.0, 1.0)); put("vy", vy.coerceIn(0.0, 1.0)) })
+        return true
+    }
+
+    private fun sendPing(url: String, x: JsonElement?, y: JsonElement?, a: JsonElement?, k: String) {
+        if (!takePingToken()) return host.toast("핑을 너무 자주 찍었어요. 잠시 뒤에 다시 해 보세요")
+        send(buildJsonObject {
+            put("type", "ping"); put("url", url); put("x", x ?: JsonPrimitive(0)); put("y", y ?: JsonPrimitive(0)); put("a", a ?: JsonNull); put("k", k)
+        })
+        val me = you
+        host.toPage("jam:ping", pingShow("me-${clock()}", me?.name ?: "나", me?.color ?: "#2ee6a6", x, y, a, k))
+    }
+
+    /** 화면 미러링을 보면서 찍은 핑: 영상 안 위치(0~1) → 미러링하는 사람의 탭 위에 그려져 영상으로 모두에게 보인다 */
+    fun sendMirrorPing(x: Double, y: Double, kind: String): Boolean {
+        if (!active || !pingEnabled || x !in 0.0..1.0 || y !in 0.0..1.0) return false
+        if (!takePingToken()) { host.toast("핑을 너무 자주 찍었어요. 잠시 뒤에 다시 해 보세요"); return false }
+        return send(buildJsonObject { put("type", "mping"); put("x", x); put("y", y); put("k", pingKind(kind)) })
+    }
+
+    private fun pingShow(id: String, name: String, color: String, x: JsonElement?, y: JsonElement?, a: JsonElement?, k: String) = buildJsonObject {
+        put("id", id); put("name", name); put("color", color)
+        put("x", x ?: JsonPrimitive(0)); put("y", y ?: JsonPrimitive(0)); put("a", a ?: JsonNull)
+        put("k", k); put("sec", pingSeconds.coerceIn(2, 30))
+    }
+
+    // ======================================================================
     // 내가 하는 일
     // ======================================================================
     fun sendChat(text: String) {
@@ -706,6 +903,16 @@ class JamController(
 
     /** 끝의 / 만 다른 주소는 같은 주소 (https://a.com 과 https://a.com/ — 웹뷰가 붙여서 돌려준다) */
     private fun sameUrl(a: String?, b: String?) = a != null && b != null && a.trimEnd('/') == b.trimEnd('/')
+
+    companion object {
+        /** 휠 방향: 위 = 조심, 아래 = 뭐지?, 오른쪽 = 이거 봐, 왼쪽 = 갈게요, 그대로 = 여기 */
+        val PING_KINDS = listOf("here", "what", "look", "warn", "omw")
+        val PING_ICON = mapOf("here" to "📍", "what" to "❓", "look" to "👀", "warn" to "⚠️", "omw" to "🏃")
+        val PING_LABEL = mapOf("here" to "여기", "what" to "뭐지?", "look" to "이거 봐", "warn" to "조심", "omw" to "갈게요")
+        const val PING_BURST = 6
+        const val PING_PER_SEC = 2.0
+        fun pingKind(k: String?) = if (k in PING_KINDS) k!! else "here"
+    }
 
     // ---------------- 파싱 ----------------
     private fun applySettings(s: JsonObject) {

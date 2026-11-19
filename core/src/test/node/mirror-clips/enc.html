@@ -1,0 +1,40 @@
+<!doctype html><meta charset="utf-8"><canvas id="c" width="640" height="360"></canvas>
+<script>
+const { ipcRenderer } = require('electron');
+const W = 320, H = 180, FRAMES = 30, FPS = 15;
+const c = document.getElementById('c');
+const g = c.getContext('2d');
+function draw(i) {
+  g.fillStyle = `hsl(${(i * 4) % 360},70%,45%)`; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#fff'; g.font = 'bold 32px sans-serif'; g.fillText('JAM ' + i, 20 + (i * 5) % 150, 100);
+  g.fillStyle = '#ffd43b'; g.beginPath(); g.arc(160 + 100 * Math.cos(i / 4), 90 + 60 * Math.sin(i / 4), 15, 0, 7); g.fill();
+}
+const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+async function run(name, cfg) {
+  const lines = [];
+  const sup = await VideoEncoder.isConfigSupported(cfg);
+  ipcRenderer.send('log', name + ' supported=' + sup.supported);
+  if (!sup.supported) return;
+  const enc = new VideoEncoder({
+    output: (chunk) => { const u = new Uint8Array(chunk.byteLength); chunk.copyTo(u); lines.push(JSON.stringify({ k: chunk.type === 'key', ts: chunk.timestamp, d: b64(u) })); },
+    error: (e) => ipcRenderer.send('log', name + ' error ' + e.message),
+  });
+  enc.configure(cfg);
+  for (let i = 0; i < FRAMES; i++) {
+    draw(i);
+    const f = new VideoFrame(c, { timestamp: Math.round(i * 1e6 / FPS) });
+    enc.encode(f, { keyFrame: i % 15 === 0 });
+    f.close();
+  }
+  await enc.flush();
+  enc.close();
+  ipcRenderer.send('done', name, [JSON.stringify({ codec: cfg.codec, w: W, h: H, fps: FPS })].concat(lines));
+}
+(async () => {
+  try {
+    await run('avc.jsonl', { codec: 'avc1.640028', avc: { format: 'annexb' }, width: W, height: H, bitrate: 5e5, framerate: FPS, latencyMode: 'realtime' });
+    await run('vp8.jsonl', { codec: 'vp8', width: W, height: H, bitrate: 5e5, framerate: FPS, latencyMode: 'realtime' });
+  } catch (e) { ipcRenderer.send('log', 'fail ' + e.stack); }
+  ipcRenderer.send('quit');
+})();
+</script>

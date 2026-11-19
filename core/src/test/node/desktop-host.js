@@ -8,7 +8,8 @@
  *  - --relay 를 주면 backend 저장소의 중계 서버 + 데스크톱의 relay-tunnel.js 도 띄우고 jamr:// 초대 코드도 출력
  *  - 호스트가 받은 메시지는 한 줄 JSON 으로 stdout 에 쓴다:  {"ev":"host-msg","msg":{...}}
  *  - stdin 한 줄 JSON 명령:  {"cmd":"send","msg":{...}}  /  {"cmd":"drop-guests"}  /  {"cmd":"quit"}
- *  - 참여 요청은 자동 승인 (이름이 "거절" 로 시작하면 거절)
+ *  - 참여 요청은 자동 승인 (이름이 "거절" 로 시작하면 거절, 근처 페어링 요청도 같음)
+ *  - --beacon <UDP 포트>: 근처 Jam 알림(server/nearby.js)을 0.5초마다 보낸다
  *  - 중계 서버가 본 바이트는 모두 모아 두었다가 {"cmd":"relay-seen","find":[...]} 로 평문이 보였는지 답한다
  */
 const path = require('path');
@@ -73,6 +74,17 @@ async function main() {
     if (msg.type === 'welcome' && !welcomed) {
       welcomed = true;
       const code = msg.room.code;
+      // --beacon <UDP 포트>: 데스크톱과 같은 "근처 Jam" 알림을 보낸다 (server/nearby.js 그대로)
+      if (opt('--beacon')) {
+        const { startBeacon } = require(path.join(desktopDir, 'server', 'nearby.js'));
+        startBeacon({
+          id: 'testhost' + crypto.randomBytes(4).toString('hex'),
+          port: jam.port,
+          udpPort: Number(opt('--beacon')),
+          intervalMs: 500,
+          getRooms: () => [{ code, name: 'PC호스트', access, n: [...jam.rooms.values()][0]?.members.size || 1 }],
+        });
+      }
       out({
         ev: 'ready',
         code,
@@ -84,7 +96,9 @@ async function main() {
       return;
     }
     if (msg.type === 'join-request') {
-      send({ type: 'approve', id: msg.id, ok: !String(msg.name).startsWith('거절') });
+      // --pair-delay <ms>: 근처 페어링 요청은 잠시 뒤에 수락 (에뮬레이터에서 6자리 화면을 보려고)
+      const delay = msg.pair ? Number(opt('--pair-delay') || 0) : 0;
+      setTimeout(() => send({ type: 'approve', id: msg.id, ok: !String(msg.name).startsWith('거절') }), delay);
     }
     out({ ev: 'host-msg', msg });
   });
@@ -130,6 +144,57 @@ async function main() {
     if (!controlPort) process.exit(0);
   });
 
+  // 화면 미러링 흉내: 미리 인코딩한 조각 파일(첫 줄 {codec,w,h,fps}, 다음 줄마다 {k,ts,d})을
+  // 데스크톱 mirror.js 의 sendChunk 와 똑같이 32KB 조각(mv)으로 보낸다. 끝나면 처음부터 다시 (loop)
+  let mirrorTimer = null;
+  function mirrorPlay(c) {
+    const fs = require('fs');
+    const lines = fs.readFileSync(c.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const head = lines.shift();
+    const sid = 'testmirror' + crypto.randomBytes(3).toString('hex');
+    clearTimeout(mirrorTimer);
+    send({ type: 'mirror-start', sid, w: head.w, h: head.h, title: c.title || '시험 화면' });
+    out({ ev: 'mirror-started', sid, codec: head.codec });
+    let f = 0;
+    let idx = 0;
+    const PIECE = 32 * 1024;
+    const tick = () => {
+      if (idx >= lines.length) {
+        if (!c.loop) return out({ ev: 'mirror-done', frames: f });
+        idx = 0;
+      }
+      const ch = lines[idx++];
+      const buf = Buffer.from(ch.d, 'base64');
+      const n = Math.max(1, Math.ceil(buf.length / PIECE));
+      const ts = Math.round(performance.now() * 1000);
+      for (let i = 0; i < n; i++) {
+        const m = { type: 'mv', sid, f, k: ch.k, i, n, ts, d: buf.subarray(i * PIECE, (i + 1) * PIECE).toString('base64') };
+        if (ch.k && i === 0) Object.assign(m, { w: head.w, h: head.h, c: head.codec });
+        send(m);
+      }
+      f++;
+      mirrorTimer = setTimeout(tick, 1000 / (head.fps || 15));
+    };
+    setTimeout(tick, 300);
+  }
+
+  // 같이 보는 파일 흉내: 데스크톱 jamfiles.js 의 pack 으로 묶고 files.js 처럼 file-offer → file-up(32KB) → file-up-end
+  function fileShare(c) {
+    const fs = require('fs');
+    const { pack } = require(path.join(desktopDir, 'src', 'jamfiles.js'));
+    const name = c.name || path.basename(c.file);
+    const bytes = c.text != null ? Buffer.from(String(c.text), 'utf8') : fs.readFileSync(c.file);
+    const packed = pack([{ p: name, bytes }], name);
+    const sha = crypto.createHash('sha256').update(packed).digest('hex');
+    const fid = Array.from(crypto.randomBytes(16), (x) => 'abcdefghijklmnopqrstuvwxyz0123456789'[x % 36]).join('');
+    send({ type: 'file-offer', fid, name, kind: c.kind || 'pdf', size: packed.length, sha, entry: name, count: 1, net: false });
+    const PIECE = 32 * 1024;
+    const n = Math.ceil(packed.length / PIECE);
+    for (let i = 0; i < n; i++) send({ type: 'file-up', fid, i, d: packed.subarray(i * PIECE, (i + 1) * PIECE).toString('base64') });
+    send({ type: 'file-up-end', fid });
+    out({ ev: 'file-shared', fid, sha, size: packed.length });
+  }
+
   async function handle(c) {
     if (c.cmd === 'send') send(c.msg);
     else if (c.cmd === 'drop-guests') {
@@ -138,6 +203,16 @@ async function main() {
         for (const m of room.members.values()) if (m.id !== room.hostId) m.ws.terminate();
       }
       out({ ev: 'dropped' });
+    } else if (c.cmd === 'mirror-play') {
+      mirrorPlay(c);
+    } else if (c.cmd === 'file-share') {
+      fileShare(c);
+    } else if (c.cmd === 'file-remove') {
+      send({ type: 'file-remove', fid: c.fid });
+    } else if (c.cmd === 'mirror-stop') {
+      clearTimeout(mirrorTimer);
+      mirrorTimer = null;
+      send({ type: 'mirror-stop' });
     } else if (c.cmd === 'relay-seen') {
       const all = Buffer.concat(seen).toString('utf8');
       out({ ev: 'relay-seen', bytes: all.length, found: (c.find || []).filter((s) => all.includes(s)) });

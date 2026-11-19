@@ -211,7 +211,7 @@ class Tab(
     companion object {
         val ALLOWED = setOf(
             "jam:ready", "jam:viewport", "jam:cursor", "jam:click", "jam:ad", "jam:media", "jam:media-tick",
-            "jam:media-init", "jam:media-ready", "jam:blocked", "jam:clipboard", "jam:clipboard-site",
+            "jam:media-init", "jam:media-ready", "jam:blocked", "jam:clipboard", "jam:clipboard-site", "jam:ping", "jam:ping-shown",
         )
     }
 }

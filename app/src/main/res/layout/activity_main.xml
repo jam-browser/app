@@ -184,6 +184,15 @@
                     android:textStyle="bold" />
 
                 <TextView
+                    android:id="@+id/seg_files"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:padding="8dp"
+                    android:text="파일"
+                    android:textColor="@color/text"
+                    android:textStyle="bold" />
+
+                <TextView
                     android:id="@+id/panel_status"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -300,6 +309,31 @@
                             android:layout_marginTop="10dp"
                             android:textColor="@color/muted"
                             android:textSize="13sp" />
+
+                        <!-- 근처 Jam: 같은 와이파이의 PC 가 보내는 알림 (초대 링크 없이 6자리 확인 코드로 참여) -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="20dp"
+                            android:text="근처 Jam (같은 와이파이)"
+                            android:textColor="@color/text"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/nearby_empty"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="찾는 중… 같은 와이파이의 PC에서 Jam을 시작하면 여기에 나타나요"
+                            android:textColor="@color/muted"
+                            android:textSize="12sp" />
+
+                        <LinearLayout
+                            android:id="@+id/nearby_list"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
 
                         <TextView
                             android:layout_width="match_parent"
@@ -432,6 +466,35 @@
 
                         <LinearLayout
                             android:id="@+id/queue"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+                </ScrollView>
+
+                <!-- 같이 보는 파일 -->
+                <ScrollView
+                    android:id="@+id/page_files"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="12dp">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="호스트가 공유한 PDF · 이미지 · 텍스트를 받아서 볼 수 있어요. 받은 파일은 앱 안 메모리에만 있고, 다운로드 폴더에는 저장되지 않아요. Jam 을 나가면 지워져요."
+                            android:textColor="@color/muted"
+                            android:textSize="12sp" />
+
+                        <LinearLayout
+                            android:id="@+id/files_list"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
