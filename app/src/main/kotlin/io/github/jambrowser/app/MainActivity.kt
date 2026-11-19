@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     private lateinit var jam: JamController
     private lateinit var downloads: DownloadGuard
     private lateinit var clipboard: ClipboardGuard
+    private lateinit var updater: AppUpdater
 
     private val tabs = ArrayList<Tab>()
     private var active: Tab? = null
@@ -130,6 +131,9 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         bindViews()
         newTab(homeUrl)
         handleIntent(intent)
+        updater = AppUpdater(this, http)
+        updater.start()
+        updater.handleDebugIntent(intent)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -147,6 +151,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+        updater.handleDebugIntent(intent)
     }
 
     /** 초대 링크 · 공유받은 글: 참여 화면에 채우기만 하고, 참여는 사용자가 직접 누른다 */
@@ -765,6 +770,8 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         pm.menu.add(0, 2, 0, "확인 전 보관함 (다운로드)")
         if (jam.active) pm.menu.add(0, 3, 0, "지금 페이지를 Jam 대기열에")
         pm.menu.add(0, 4, 0, "이 탭을 Jam 탭으로 쓰기").isEnabled = jam.active && active != jamTab
+        pm.menu.add(0, 6, 0, "설정")
+        pm.menu.add(0, 7, 0, "업데이트 확인")
         pm.menu.add(0, 5, 0, "정보 · 보안 안내")
         pm.setOnMenuItemClickListener {
             when (it.itemId) {
@@ -779,10 +786,26 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                     renderAll()
                 }
                 5 -> showAbout()
+                6 -> showSettings()
+                7 -> updater.checkNow(manual = true)
             }
             true
         }
         pm.show()
+    }
+
+    private fun showSettings() {
+        val items = arrayOf("자동 업데이트 확인")
+        val checked = booleanArrayOf(updater.enabled)
+        AlertDialog.Builder(this)
+            .setTitle("설정")
+            .setMultiChoiceItems(items, checked) { _, i, v ->
+                when (i) {
+                    0 -> updater.enabled = v
+                }
+            }
+            .setPositiveButton("닫기", null)
+            .show()
     }
 
     private fun showAbout() {
@@ -794,6 +817,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
                     "• 초대 코드의 비밀키는 서버로 보내지 않고, Jam 메시지는 모두 그 키로 암호화돼요 (AES-256-GCM). 서버 · 중계 서버는 전달만 해요.\n" +
                     "• 로그인 · 결제 페이지 주소는 다른 사람에게 공유되지 않아요. 로그인은 각자 자기 폰에서 해요.\n" +
                     "• 설치 파일(APK 등)은 '확인 전 보관함'에 갇혀 있다가, 직접 확인하고 내보내야만 나가요.\n" +
+                    "• 앱 설치 권한은 이 앱 자신의 업데이트에만 써요 (GitHub 릴리스 · SHA-256 · 같은 서명 확인, 설치는 안드로이드가 다시 물어봐요).\n" +
                     "• 사이트가 클립보드에 글자를 넣으면 알려 드려요. 명령어라면 절대 실행하지 마세요.\n\n" +
                     "소스: github.com/jam-browser/app"
             )
@@ -839,6 +863,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
         super.onResume()
         appInFront = true
         clipboard.refreshBaseline()
+        updater.onResume()
         active?.webView?.onResume()
         if (jam.active) jam.onJamTabFrontChanged()
     }
@@ -853,6 +878,7 @@ class MainActivity : AppCompatActivity(), Tab.TabHost, JamController.Host {
 
     override fun onDestroy() {
         if (isFinishing) jam.leave()
+        updater.stop()
         tabs.forEach { it.destroy() }
         tabs.clear()
         super.onDestroy()
